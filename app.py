@@ -13,7 +13,7 @@ DB_CONFIG = {
     'host': 'localhost',
     'user': 'newuser',
     'password': 'password',
-    'database': 'MP3'
+    'db': 'academicworld'
 }
 
 app.layout = html.Div([
@@ -107,6 +107,8 @@ app.layout = html.Div([
 
 # Shared Database function
 def execute_query(query, params=None):
+    print(query)
+    print(params)
     """Universal query executor with enhanced error handling"""
     mysql = None  # Initialize outside try block to ensure variable existence
     try:
@@ -115,6 +117,7 @@ def execute_query(query, params=None):
             raise ConnectionError("Failed to connect to database")
             
         result = mysql.execute_query(query, params)
+        print(pd.DataFrame(result))
         return pd.DataFrame(result) if result else pd.DataFrame()
 
     except Exception as e:
@@ -131,7 +134,7 @@ def get_filtered_keywords(filters):
     """Dynamic query builder based on active filters"""
     base_query = """
         SELECT k.name, {metric} AS value
-        FROM keywords k
+        FROM keyword k
         {joins}
         WHERE {conditions}
         GROUP BY k.name
@@ -139,49 +142,56 @@ def get_filtered_keywords(filters):
         LIMIT %s
     """
     
-    metric = "SUM(k.score)"  # Default metric for faculty-related filters
+    metric = "SUM(*)" # Default metric for faculty-related filters
     joins = []
     conditions = []
     params = []
     limit = filters.get('limit', 15)
 
-    if filters.get('publications'):
+    if filters.get('publication'):
         metric = "COUNT(*)"
-        joins.append("JOIN publication_keywords pk ON k.id = pk.keyword_id")
-        joins.append("JOIN publications p ON pk.publication_id = p.id")
+        joins.append("JOIN Publication_Keyword pk ON k.id = pk.keyword_id")
+        joins.append("JOIN publication p ON pk.publication_id = p.id")
         conditions.append("p.title IN %s")
         params.append(tuple(filters['publications']))
         
     elif filters.get('professors'):
-        joins.append("JOIN faculty_keywords fk ON k.id = fk.keyword_id")
+        joins.append("JOIN faculty_keyword fk ON k.id = fk.keyword_id")
         joins.append("JOIN faculty f ON fk.faculty_id = f.id")
         conditions.append("f.name IN %s")
         params.append(tuple(filters['professors']))
         
     elif filters.get('universities'):
-        joins.append("JOIN faculty_keywords fk ON k.id = fk.keyword_id")
+        joins.append("JOIN faculty_keyword fk ON k.id = fk.keyword_id")
         joins.append("JOIN faculty f ON fk.faculty_id = f.id")
-        joins.append("JOIN affiliation a ON f.affiliation = a.id")
+        joins.append("JOIN university a ON f.university = a.id")
         conditions.append("a.name IN %s")
         params.append(tuple(filters['universities']))
         
     else:  # Default scope-based query
         if filters['scope'] == 'faculty':
-            joins.append("JOIN faculty_keywords fk ON k.id = fk.keyword_id")
-        elif filters['scope'] == 'publications':
-            joins.append("JOIN publication_keywords pk ON k.id = pk.keyword_id")
+            joins.append("JOIN faculty_keyword fk ON k.id = fk.keyword_id")
+        elif filters['scope'] == 'publication':
+            joins.append("JOIN Publication_Keyword pk ON k.id = pk.keyword_id")
         else:
             return execute_query("""
-                (SELECT k.name, COUNT(*) AS value 
-                 FROM faculty_keywords fk JOIN keywords k ON fk.keyword_id = k.id 
-                 GROUP BY k.name)
-                UNION ALL
-                (SELECT k.name, COUNT(*) AS value 
-                 FROM publication_keywords pk JOIN keywords k ON pk.keyword_id = k.id 
-                 GROUP BY k.name)
-                GROUP BY name 
-                ORDER BY SUM(value) DESC 
-                LIMIT %s
+                SELECT name, SUM(value) AS total_value
+		FROM (
+		    (SELECT k.name, COUNT(*) AS value 
+		     FROM faculty_keyword fk 
+		     JOIN keyword k ON fk.keyword_id = k.id 
+		     GROUP BY k.name)
+		    UNION ALL
+    
+	    	(SELECT k.name, COUNT(*) AS value 
+	     	FROM Publication_Keyword pk 
+	     	JOIN keyword k ON pk.keyword_id = k.id 
+	     	GROUP BY k.name)
+		) AS combined_data
+		GROUP BY name
+		ORDER BY total_value DESC
+		LIMIT %s;
+
             """, (limit,))
     
     query = base_query.format(
@@ -190,7 +200,9 @@ def get_filtered_keywords(filters):
         conditions=" AND ".join(conditions) if conditions else "1=1"
     )
     params.append(limit)
-    
+    print("filtered query")
+    print(query)
+    print(tuple(params))
     return execute_query(query, tuple(params))
 
 # Publication Analysis Functions
@@ -202,10 +214,10 @@ def get_top_publications(keyword, top_n):
                p.year,
                GROUP_CONCAT(DISTINCT f.name) AS authors,
                COUNT(DISTINCT c.id) AS citations
-        FROM publications p
-        JOIN publication_keywords pk ON p.id = pk.publication_id
-        JOIN keywords k ON pk.keyword_id = k.id
-        LEFT JOIN faculty_publications fp ON p.id = fp.publication_id
+        FROM publication p
+        JOIN Publication_Keyword pk ON p.id = pk.publication_id
+        JOIN keyword k ON pk.keyword_id = k.id
+        LEFT JOIN faculty_publication fp ON p.id = fp.publication_id
         LEFT JOIN faculty f ON fp.faculty_id = f.id
         LEFT JOIN citations c ON p.id = c.publication_id
         WHERE k.name = %s
@@ -225,11 +237,11 @@ def get_top_publications(keyword, top_n):
 def populate_filters(_):
     return (
         [{'label': uni, 'value': uni} 
-         for uni in execute_query("SELECT name FROM affiliation").name],
+         for uni in execute_query("SELECT name FROM university").name],
         [{'label': prof, 'value': prof} 
          for prof in execute_query("SELECT name FROM faculty").name],
         [{'label': pub, 'value': pub} 
-         for pub in execute_query("SELECT title FROM publications").title]
+         for pub in execute_query("SELECT title FROM publication").title]
     )
 
 @app.callback(
@@ -249,8 +261,9 @@ def update_keyword_analysis(scope, limit, universities, professors, publications
         'professors': professors,
         'publications': publications
     }
-    
+    print(filters)
     df = get_filtered_keywords(filters)
+    print(df)
     metric = 'Score' if any([universities, professors]) else 'Frequency'
     
     # Visualization
@@ -327,12 +340,12 @@ def update_publication_analysis(keyword, top_n):
     return fig, stats
 
 # Style Configuration
-app.css.append_css({
-    'external_url': [
-        'https://codepen.io/chriddyp/pen/bWLwgP.css',
-        '/assets/custom.css'
-    ]
-})
+#app.css.append_css({
+#    'external_url': [
+#        'https://codepen.io/chriddyp/pen/bWLwgP.css',
+#        '/assets/custom.css'
+#    ]
+#})
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8050)
+    app.run(debug=True, dev_tools_hot_reload = False, port=8050)
