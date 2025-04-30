@@ -11,9 +11,9 @@ server = app.server
 # Database Configuration
 DB_CONFIG = {
     'host': 'localhost',
-    'user': 'academic_user',
-    'password': 'secure_password',
-    'database': 'AcademicWorld'
+    'user': 'newuser',
+    'password': 'password',
+    'database': 'MP3'
 }
 
 app.layout = html.Div([
@@ -105,19 +105,24 @@ app.layout = html.Div([
     ])
 ], style={'fontFamily': 'Arial, sans-serif'})
 
-# Shared Database Functions
+# Shared Database function
 def execute_query(query, params=None):
-    """Universal query executor with error handling"""
+    """Universal query executor with enhanced error handling"""
+    mysql = None  # Initialize outside try block to ensure variable existence
     try:
         mysql = MySQLUtils(**DB_CONFIG)
-        if mysql.connect():
-            result = mysql.execute_query(query, params)
-            return pd.DataFrame(result) if result else pd.DataFrame()
+        if not mysql.connect():
+            raise ConnectionError("Failed to connect to database")
+            
+        result = mysql.execute_query(query, params)
+        return pd.DataFrame(result) if result else pd.DataFrame()
+
     except Exception as e:
         print(f"Database Error: {str(e)}")
         return pd.DataFrame()
+        
     finally:
-        if mysql.connection:
+        if mysql and hasattr(mysql, 'connection'):
             mysql.close()
 
 # Keyword Analysis Functions
@@ -330,4 +335,4 @@ app.css.append_css({
 })
 
 if __name__ == '__main__':
-    app.run_server(debug=True, port=8050)
+    app.run(debug=True, port=8050)
