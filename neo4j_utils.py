@@ -9,8 +9,10 @@ class Neo4jUtils:
         self.uri = "bolt://localhost:7687"  # Default academic DB port
         
         # Security recommendation: Store credentials in environment variables
-        self.user = os.getenv("NEO4J_USER", "neo4j")  # Default fallback
-        self.password = os.getenv("NEO4J_PASSWORD", "cs411_fallback")  # Remove default in production
+        self.auth = (
+            os.getenv("NEO4J_USER") or NEO4J_CONFIG.get('auth', ('neo4j', ''))[0],
+            os.getenv("NEO4J_PASSWORD") or NEO4J_CONFIG.get('auth', ('', 'cs411_fallback'))[1]
+        )
 
     def connect(self) -> bool:
         """Establish connection with automatic credential discovery"""
