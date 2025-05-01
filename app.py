@@ -54,17 +54,23 @@ app.layout = html.Div([
                     dcc.Dropdown(
                         id='university-filter',
                         placeholder="University...",
-                        multi=True
+                        multi=True,
+			options=[],
+			value=[]
                     ),
                     dcc.Dropdown(
                         id='professor-filter',
                         placeholder="Professor...",
-                        multi=True
+                        multi=True,
+			options=[],
+			value=[]
                     ),
                     dcc.Dropdown(
                         id='publication-filter',
                         placeholder="Publication...",
-                        multi=True
+                        multi=True,
+			options=[],
+			value=[]
                     )
                 ], className='filter-column')
             ], className='control-panel'),
@@ -107,8 +113,6 @@ app.layout = html.Div([
 
 # Shared Database function
 def execute_query(query, params=None):
-    print(query)
-    print(params)
     """Universal query executor with enhanced error handling"""
     mysql = None  # Initialize outside try block to ensure variable existence
     try:
@@ -130,8 +134,7 @@ def execute_query(query, params=None):
 
 # Keyword Analysis Functions
 def get_filtered_keywords(filters):
-    """Dynamic query builder for keyword analysis"""
-    """Dynamic query builder based on active filters"""
+    """Dynamic score aggregation based on entity filters"""
     base_query = """
         SELECT k.name, {metric} AS value
         FROM keyword k
@@ -142,88 +145,88 @@ def get_filtered_keywords(filters):
         LIMIT %s
     """
     
-    metric = "SUM(*)" # Default metric for faculty-related filters
+    metric = "COUNT(*)"  # Default faculty metric
     joins = []
-    conditions = []
+    conditions = ["1=1"]  # Default condition
     params = []
     limit = filters.get('limit', 15)
 
-    if filters.get('publication'):
-        metric = "COUNT(*)"
-        joins.append("JOIN Publication_Keyword pk ON k.id = pk.keyword_id")
-        joins.append("JOIN publication p ON pk.publication_id = p.id")
+    # Entity-specific score aggregation
+    if filters.get('publications'):
+        metric = "SUM(pk.score)"
+        joins.extend([
+            "JOIN Publication_Keyword pk ON k.id = pk.keyword_id",
+            "JOIN publication p ON pk.publication_id = p.id"
+        ])
         conditions.append("p.title IN %s")
         params.append(tuple(filters['publications']))
         
     elif filters.get('professors'):
-        joins.append("JOIN faculty_keyword fk ON k.id = fk.keyword_id")
-        joins.append("JOIN faculty f ON fk.faculty_id = f.id")
+        metric = "SUM(fk.score)"
+        joins.extend([
+            "JOIN faculty_keyword fk ON k.id = fk.keyword_id",
+            "JOIN faculty f ON fk.faculty_id = f.id"
+        ])
         conditions.append("f.name IN %s")
         params.append(tuple(filters['professors']))
         
     elif filters.get('universities'):
-        joins.append("JOIN faculty_keyword fk ON k.id = fk.keyword_id")
-        joins.append("JOIN faculty f ON fk.faculty_id = f.id")
-        joins.append("JOIN university a ON f.university = a.id")
-        conditions.append("a.name IN %s")
+        joins.extend([
+            "JOIN faculty_keyword fk ON k.id = fk.keyword_id",
+            "JOIN faculty f ON fk.faculty_id = f.id",
+            "JOIN university u ON f.university = u.id"
+        ])
+        conditions.append("u.name IN %s")
         params.append(tuple(filters['universities']))
         
-    else:  # Default scope-based query
+    else:  # Cross-entity aggregation
         if filters['scope'] == 'faculty':
             joins.append("JOIN faculty_keyword fk ON k.id = fk.keyword_id")
+            metric = "SUM(fk.score)"
         elif filters['scope'] == 'publication':
             joins.append("JOIN Publication_Keyword pk ON k.id = pk.keyword_id")
-        else:
+            metric = "SUM(pk.score)"
+        else:  # Global aggregation
             return execute_query("""
-                SELECT name, SUM(value) AS total_value
-		FROM (
-		    (SELECT k.name, COUNT(*) AS value 
-		     FROM faculty_keyword fk 
-		     JOIN keyword k ON fk.keyword_id = k.id 
-		     GROUP BY k.name)
-		    UNION ALL
-    
-	    	(SELECT k.name, COUNT(*) AS value 
-	     	FROM Publication_Keyword pk 
-	     	JOIN keyword k ON pk.keyword_id = k.id 
-	     	GROUP BY k.name)
-		) AS combined_data
-		GROUP BY name
-		ORDER BY total_value DESC
-		LIMIT %s;
-
+                SELECT name, SUM(score) AS value FROM (
+                    SELECT k.name, fk.score 
+                    FROM faculty_keyword fk
+                    JOIN keyword k ON fk.keyword_id = k.id
+                    UNION ALL
+                    SELECT k.name, pk.score
+                    FROM Publication_Keyword pk
+                    JOIN keyword k ON pk.keyword_id = k.id
+                ) AS combined
+                GROUP BY name
+                ORDER BY value DESC
+                LIMIT %s
             """, (limit,))
     
     query = base_query.format(
         metric=metric,
         joins="\n".join(joins),
-        conditions=" AND ".join(conditions) if conditions else "1=1"
+        conditions=" AND ".join(conditions)
     )
-    params.append(limit)
-    print("filtered query")
-    print(query)
-    print(tuple(params))
-    return execute_query(query, tuple(params))
+    return execute_query(query, tuple(params) + (limit,))
 
 # Publication Analysis Functions
 def get_top_publications(keyword, top_n):
     """Retrieve publications with highest keyword relevance"""
     query = """
-        SELECT p.title, 
-               SUM(k.score) AS score,
-               p.year,
-               GROUP_CONCAT(DISTINCT f.name) AS authors,
-               COUNT(DISTINCT c.id) AS citations
-        FROM publication p
-        JOIN Publication_Keyword pk ON p.id = pk.publication_id
-        JOIN keyword k ON pk.keyword_id = k.id
-        LEFT JOIN faculty_publication fp ON p.id = fp.publication_id
-        LEFT JOIN faculty f ON fp.faculty_id = f.id
-        LEFT JOIN citations c ON p.id = c.publication_id
-        WHERE k.name = %s
-        GROUP BY p.title, p.year
-        ORDER BY score DESC
-        LIMIT %s
+	SELECT p.title,
+        pk.score AS keyword_score,  -- Direct score from junction table
+        p.num_citations,
+        p.year,
+        GROUP_CONCAT(DISTINCT f.name) AS authors
+	FROM publication p
+	JOIN Publication_Keyword pk ON p.id = pk.publication_id
+	JOIN keyword k ON pk.keyword_id = k.id
+	LEFT JOIN faculty_publication fp ON p.id = fp.publication_id
+	LEFT JOIN faculty f ON fp.faculty_id = f.id
+	WHERE k.name = %s
+	GROUP BY p.id, pk.score, p.title, p.year, p.num_citations  -- Added pk.score to GROUP BY
+	ORDER BY keyword_score DESC
+	LIMIT %s;
     """
     return execute_query(query, (keyword, top_n))
 
@@ -234,14 +237,23 @@ def get_top_publications(keyword, top_n):
      Output('publication-filter', 'options')],
     Input('scope-selector', 'value')
 )
+
 def populate_filters(_):
+    # Add error handling and case normalization
+    def safe_query(query, col_name='name'):
+        try:
+            df = execute_query(query)
+            if not df.empty:
+                return [{'label': v, 'value': v} for v in df[col_name].str.strip().str.title()]
+            return []
+        except Exception as e:
+            print(f"Filter population error: {str(e)}")
+            return []
+
     return (
-        [{'label': uni, 'value': uni} 
-         for uni in execute_query("SELECT name FROM university").name],
-        [{'label': prof, 'value': prof} 
-         for prof in execute_query("SELECT name FROM faculty").name],
-        [{'label': pub, 'value': pub} 
-         for pub in execute_query("SELECT title FROM publication").title]
+        safe_query("SELECT name FROM university", 'name'),
+        safe_query("SELECT name FROM faculty", 'name'),
+        safe_query("SELECT title FROM publication", 'title')
     )
 
 @app.callback(
@@ -253,6 +265,7 @@ def populate_filters(_):
      Input('professor-filter', 'value'),
      Input('publication-filter', 'value')]
 )
+
 def update_keyword_analysis(scope, limit, universities, professors, publications):
     filters = {
         'scope': scope,
@@ -261,35 +274,32 @@ def update_keyword_analysis(scope, limit, universities, professors, publications
         'professors': professors,
         'publications': publications
     }
-    print(filters)
-    df = get_filtered_keywords(filters)
-    print(df)
-    metric = 'Score' if any([universities, professors]) else 'Frequency'
     
-    # Visualization
-    fig = px.bar(
+    df = get_filtered_keywords(filters)
+    
+    fig = px.treemap(
         df,
-        x='value',
-        y='name',
-        orientation='h',
+        path=['name'],
+        values='value',
         color='value',
         color_continuous_scale='Teal',
-        labels={'name': 'Keyword', 'value': metric},
-        title=f'Keyword {metric} Distribution'
+        title='Keyword Impact Distribution',
+        labels={'value': 'Aggregated Score', 'name': 'Keyword'}
     )
-    fig.update_layout(
-        yaxis={'categoryorder': 'total ascending'},
-        plot_bgcolor='rgba(240,240,240,0.9)',
-        hoverlabel={'bgcolor': 'white'}
-    )
-
-    # Statistics
+    
     stats = [
-        html.H4("Current Context:", style={'color': '#2c3e50'}),
-        html.P(f"Active Filters: {get_active_filters(filters)}"),
-        html.P(f"Total Keywords: {len(df)}"),
-        html.P(f"Average {metric}: {df['value'].mean():.1f}"),
-        html.P(f"Maximum {metric}: {df['value'].max()} ({df.iloc[0]['name']})")
+        html.H5("Aggregation Context:", className="stats-header"),
+        html.P(f"Total Keywords: {len(df):,}", className="stat-item"),
+        html.P(f"Score Range: {df['value'].min():.1f} - {df['value'].max():.1f}", className="stat-item"),
+        html.P(f"75th Percentile Score: {df['value'].quantile(0.75):.1f}", className="stat-item"),
+        html.Div([
+            html.Span("Dominant Entities:", className="stat-label"),
+            html.Ul([
+                html.Li(f"Publications: {len(filters['publications'])}" if filters['publications'] else "All Publications"),
+                html.Li(f"Professors: {len(filters['professors'])}" if filters['professors'] else "All Faculty"),
+                html.Li(f"Universities: {len(filters['universities'])}" if filters['universities'] else "All Institutions")
+            ], className="entity-list")
+        ], className="stat-item")
     ]
     
     return fig, stats
@@ -307,37 +317,42 @@ def update_publication_analysis(keyword, top_n):
         return px.scatter(title="Enter a keyword to begin analysis"), ""
     
     df = get_top_publications(keyword, top_n)
-    
     if df.empty:
         return px.scatter(title=f"No publications found for '{keyword}'"), ""
     
-    # Visualization
+    # Visualization updates
     fig = px.bar(
         df,
-        x='score',
+        x='keyword_score',
         y='title',
         color='year',
-        hover_data=['authors', 'citations'],
+        hover_data=['authors', 'num_citations'],  # Changed 'citations' → 'num_citations'
         labels={
-            'score': 'Relevance Score',
-            'title': 'Publication',
+            'keyword_score': 'Keyword Relevance Score',
+            'title': 'Publication Title',
             'year': 'Publication Year',
             'authors': 'Authors',
-            'citations': 'Citations'
+            'num_citations': 'Citations'  # Label mapping update
         },
         title=f"Top {top_n} Publications for '{keyword.title()}'"
     )
-    fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+    fig.update_layout(
+        yaxis={'categoryorder': 'total ascending'},
+        hovermode='closest'
+    )
 
-    # Metadata
+    # Metadata updates
     stats = [
-        html.H4("Publication Insights:"),
-        html.P(f"Average Citations: {df['citations'].mean():.1f}"),
-        html.P(f"Most Recent Publication: {df['year'].max()}"),
-        html.P(f"Authors with Most Publications: {df['authors'].explode().mode()[0]}")
+        html.H4("Analysis Insights:"),
+        html.P(f"Median Keyword Score: {df['keyword_score'].median():.1f}"),
+        html.P(f"Total Citations Across Selection: {df['num_citations'].sum()}"),  # Field name update
+        html.P(f"Publication Span: {df['year'].min()} - {df['year'].max()}"),
+        html.P(f"Most Frequent Author: {df['authors'].str.split(', ').explode().mode()[0]}")  # Improved author parsing
     ]
     
     return fig, stats
+
+
 
 # Style Configuration
 #app.css.append_css({
