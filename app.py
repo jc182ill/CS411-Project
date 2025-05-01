@@ -4,8 +4,12 @@ from dash import dcc, html, Input, Output, State
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import plotly.express as px
+import plotly.graph_objects as go
 import pandas as pd
+import networkx as nx
+from neo4j import GraphDatabase
 from mysql_utils import MySQLUtils
+from neo4j_utils import Neo4jUtils
 
 app = dash.Dash(__name__)
 server = app.server
@@ -16,6 +20,10 @@ DB_CONFIG = {
     'user': 'newuser',
     'password': 'password',
     'db': 'academicworld'
+}
+
+NEO4J_CONFIG = {
+     'database': 'academicworld',
 }
 
 app.layout = html.Div([
@@ -63,7 +71,7 @@ app.layout = html.Div([
             html.Div([
                 html.Label("Keyword Search:", className='control-label'),
                 dcc.Input(
-                    id='keyword-input',
+                    id='publication-keyword-input',
                     type='text',
                     placeholder='Enter research keyword...',
                     className='keyword-input'
@@ -139,33 +147,83 @@ app.layout = html.Div([
             # Supplemental Info
             html.Div(id='university-stats-panel', className='stats-panel')
         ], className='university-tab-content')
+    ]),
+    dcc.Tab(label='Related Keywords', children=[
+	html.Div([
+	    html.H4("Semantic Keyword Explorer", className='widget-header'),
+	    html.Div([
+		dcc.Input(
+		    id='keyword-input',
+		    type='text',
+		    placeholder='Enter research keyword...',
+		    debounce=True,  # Prevents rapid firing
+		    style={'width': '100%', 'padding': '10px'}
+		),
+		html.Div([
+		    html.Label("Minimum Connections:", className='control-label'),
+		    dcc.Slider(
+		        id='connection-threshold',
+		        min=2,
+		        max=20,
+		        step=2,
+		        value=3,
+		        marks={i: str(i) for i in range(2, 21)},
+		        tooltip={"placement": "bottom"}
+		    )
+		], className='threshold-control')
+	    ], className='control-bar'),
+	    dcc.Graph(
+		id='keyword-network',
+		config={'displayModeBar': False},
+		className='network-graph'
+	    )
+	], className='similarity-widget')
     ])
-
-        ])
+    ])
 ], style={'fontFamily': 'Arial, sans-serif'})
 
 # Shared Database function
-def execute_query(query, params=None):
+def execute_query(query, params=None, db_type='mysql'):
     #print(query)
-    """Universal query executor with enhanced error handling"""
-    mysql = None  # Initialize outside try block to ensure variable existence
-    try:
-        mysql = MySQLUtils(**DB_CONFIG)
-        if not mysql.connect():
-            raise ConnectionError("Failed to connect to database")
+    #print(params)
+    """Universal executor supporting both MySQL and Neo4j"""
+    if db_type == 'mysql':
+        # Existing MySQL logic
+        mysql = None
+        try:
+            mysql = MySQLUtils(**DB_CONFIG)
+            if not mysql.connect():
+                raise ConnectionError("MySQL connection failed")
+            result = mysql.execute_query(query, params)
+            #print(pd.DataFrame(result)
+            return pd.DataFrame(result) if result else pd.DataFrame()
             
-        result = mysql.execute_query(query, params)
-        #print(pd.DataFrame(result))
-        return pd.DataFrame(result) if result else pd.DataFrame()
-
-    except Exception as e:
-        print(f"Database Error: {str(e)}")
-        return pd.DataFrame()
-        
-    finally:
-        if mysql and hasattr(mysql, 'connection'):
-            mysql.close()
-
+        except Exception as e:
+            print(f"MySQL Error: {str(e)}")
+            return pd.DataFrame()
+            
+        finally:
+            if mysql and hasattr(mysql, 'connection'):
+                mysql.close()
+                
+    elif db_type == 'neo4j':
+        # Neo4j execution path
+        try:
+            n4j = Neo4jUtils(**NEO4J_CONFIG)
+            if not n4j.connect():
+            	raise ConnectionError("Neo4j connection failed")
+            records = n4j.execute_query(query, params)
+            # Convert Neo4j records to DataFrame
+            data = [dict(rec) for rec in records]
+            print(pd.DataFrame(data))
+            return pd.DataFrame(data)
+                
+        except Exception as e:
+            print(f"Neo4j Error: {str(e)}")
+            return pd.DataFrame()
+            
+    else:
+        raise ValueError("Invalid database type. Use 'mysql' or 'neo4j'")
 
 # Faculty Analysis Functions (modified)
 def get_faculty_list(search_term, limit):
@@ -321,7 +379,7 @@ def get_top_publications(keyword, top_n):
 @app.callback(
     [Output('publication-scores-chart', 'figure'),
      Output('publication-meta', 'children')],
-    [Input('keyword-input', 'value'),
+    [Input('publication-keyword-input', 'value'),
      Input('pub-count-slider', 'value')]
 )
 def update_publication_analysis(keyword, top_n):
@@ -500,6 +558,175 @@ def update_university_tab(name_input, top_n=10):
     photo_style = {'height': '200px', 'objectFit': 'cover'} if photo_url else {'display': 'none'}
     
     return pie_fig, stats_content, photo_url, photo_style
+    
+def find_similar_keywords(keyword: str, min_connections: int = 3) -> list:
+    """
+    Returns a list of keywords that share at least `min_connections` professors or publications
+    with the input keyword.
+    """
+    query = """
+    // === Professor-based keyword similarity ===
+    MATCH (k:KEYWORD {name: $keyword})
+    MATCH (k)<-[:INTERESTED_IN]-(f:FACULTY)-[:INTERESTED_IN]->(other:KEYWORD)
+    WHERE other.name <> $keyword
+    WITH other.name AS keyword, COUNT(DISTINCT f) AS connCount
+    WHERE connCount >= $min_conn
+    RETURN keyword, ['Faculty'] AS viaEntities, connCount AS totalScore
+
+    UNION
+
+    // === Publication-based keyword similarity ===
+    MATCH (k:KEYWORD {name: $keyword})
+    MATCH (k)<-[:LABEL_BY]-(p:PUBLICATION)-[:LABEL_BY]->(other:KEYWORD)
+    WHERE other.name <> $keyword
+    WITH other.name AS keyword, COUNT(DISTINCT p) AS connCount
+    WHERE connCount >= $min_conn
+    RETURN keyword, ['Publication'] AS viaEntities, connCount AS totalScore
+
+    ORDER BY totalScore DESC
+    LIMIT 15
+    """
+
+    params = {
+        "keyword": keyword.strip().lower(),
+        "min_conn": min_connections
+    }
+
+    df = execute_query(query=query, params=params, db_type='neo4j')
+
+    if df.empty:
+        return []
+    
+    return df.to_dict('records')
+    
+def empty_figure(message: str = "No data available") -> go.Figure:
+    """Return an empty Plotly figure with a centered message"""
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message,
+        xref="paper", yref="paper",
+        x=0.5, y=0.5,
+        showarrow=False,
+        font=dict(size=20)
+    )
+    fig.update_layout(
+        plot_bgcolor="white",
+        xaxis=dict(showgrid=False, visible=False),
+        yaxis=dict(showgrid=False, visible=False)
+    )
+    return fig
+    
+def create_network_graph(nodes, links, root_keyword):
+    # Create graph object
+    G = nx.Graph()
+
+    # Add nodes
+    for node in nodes:
+        G.add_node(node['id'], size=node['size'])
+
+    # Add edges
+    for link in links:
+        G.add_edge(link['source'], link['target'], weight=link['value'], label=link['type'])
+
+    # Positioning with spring layout
+    pos = nx.spring_layout(G, seed=42)
+
+    # Extract node and edge data
+    edge_x = []
+    edge_y = []
+    edge_text = []
+
+    for edge in G.edges(data=True):
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x += [x0, x1, None]
+        edge_y += [y0, y1, None]
+        edge_text.append(f"{edge[0]} ⇄ {edge[1]}<br>Type: {edge[2]['label']}")
+
+    node_x = []
+    node_y = []
+    node_size = []
+    node_text = []
+
+    for node in G.nodes(data=True):
+        x, y = pos[node[0]]
+        node_x.append(x)
+        node_y.append(y)
+        node_size.append(node[1]['size'])
+        node_text.append(node[0])
+
+    # Create figure
+    fig = go.Figure()
+
+    # Add edges
+    fig.add_trace(go.Scatter(
+        x=edge_x, y=edge_y,
+        line=dict(width=1, color='gray'),
+        hoverinfo='text',
+        mode='lines'
+    ))
+
+    # Add nodes
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers+text',
+        text=node_text,
+        textposition='top center',
+        hoverinfo='text',
+        marker=dict(
+            showscale=True,
+            colorscale='YlGnBu',
+            size=node_size,
+            color=node_size,
+            colorbar=dict(
+                thickness=15,
+                title='Connection Strength',
+                xanchor='left',
+            ),
+            line_width=2
+        )
+    ))
+
+    fig.update_layout(
+        title=f"Keyword Network: {root_keyword}",
+        showlegend=False,
+        margin=dict(l=20, r=20, t=40, b=20),
+        hovermode='closest'
+    )
+
+    return fig
+
+# Callback Logic
+@app.callback(
+    Output('keyword-network', 'figure'),
+   [Input('keyword-input', 'value'),  # Keyword entry
+     Input('connection-threshold', 'value')], 
+    prevent_initial_call=True
+)
+def update_keyword_network(selected_keyword, min_conn):
+    if not selected_keyword:
+        return empty_figure("Select a keyword to begin analysis")
+    
+    results = find_similar_keywords(selected_keyword, min_conn)
+    
+    if not results:
+        return empty_figure("No significant connections found")
+    
+    # Visualization processing
+    nodes = [{'id': selected_keyword, 'size': 40}] + [
+        {'id': kw['keyword'], 'size': 20 + kw['totalScore']*2}
+        for kw in results
+    ]
+    
+    links = [{
+        'source': selected_keyword,
+        'target': kw['keyword'],
+        'value': kw['totalScore'],
+        'type': ' / '.join(kw['viaEntities'])
+    } for kw in results]
+    
+    return create_network_graph(nodes, links, selected_keyword)
+
 
 if __name__ == '__main__':
     app.run(debug=True, dev_tools_hot_reload=False, port=8050)
