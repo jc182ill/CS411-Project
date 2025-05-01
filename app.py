@@ -1,7 +1,9 @@
 # app.py - Academic Research Analytics Dashboard
 import dash
 from dash import dcc, html, Input, Output, State
+import dash_bootstrap_components as dbc
 import plotly.express as px
+import plotly.graph_objects as go
 import pandas as pd
 from mysql_utils import MySQLUtils
 
@@ -20,95 +22,36 @@ app.layout = html.Div([
     html.H1("Academic Research Analytics Dashboard", className='main-header'),
     
     dcc.Tabs([
-        # Keyword Analysis Tab
-        dcc.Tab(label='Keyword Insights', children=[
+    #Publication Explorer Tab
+    dcc.Tab(label='Publication Explorer', children=[
+        html.Div([
             html.Div([
-                html.Div([
-                    html.Label("Analysis Scope:", className='control-label'),
-                    dcc.Dropdown(
-                        id='scope-selector',
-                        options=[
-                            {'label': 'Faculty Keywords', 'value': 'faculty'},
-                            {'label': 'Publication Keywords', 'value': 'publications'},
-                            {'label': 'Combined Analysis', 'value': 'combined'}
-                        ],
-                        value='combined',
-                        clearable=False
-                    )
-                ], className='control-column'),
-                
-                html.Div([
-                    html.Label("Results Limit:", className='control-label'),
-                    dcc.Slider(
-                        id='top-n-selector',
-                        min=5,
-                        max=50,
-                        step=5,
-                        value=15,
-                        marks={i: str(i) for i in range(5, 55, 5)}
-                    )
-                ], className='control-column'),
-                
-                html.Div([
-                    html.Label("Filters:", className='control-label'),
-                    dcc.Dropdown(
-                        id='university-filter',
-                        placeholder="University...",
-                        multi=True,
-			options=[],
-			value=[]
-                    ),
-                    dcc.Dropdown(
-                        id='professor-filter',
-                        placeholder="Professor...",
-                        multi=True,
-			options=[],
-			value=[]
-                    ),
-                    dcc.Dropdown(
-                        id='publication-filter',
-                        placeholder="Publication...",
-                        multi=True,
-			options=[],
-			value=[]
-                    )
-                ], className='filter-column')
-            ], className='control-panel'),
+                html.Label("Keyword Search:", className='control-label'),
+                dcc.Input(
+                    id='keyword-input',
+                    type='text',
+                    placeholder='Enter research keyword...',
+                    className='keyword-input'
+                )
+            ], className='search-column'),
             
-            dcc.Graph(id='keyword-visualization'),
-            html.Div(id='context-stats', className='stats-panel')
-        ]),
+            html.Div([
+                html.Label("Publications to Show:", className='control-label'),
+                dcc.Slider(
+                    id='pub-count-slider',
+                    min=5,
+                    max=100,
+                    step=5,
+                    value=25,
+                    marks={i: str(i) for i in range(5, 105, 20)}
+                )
+            ], className='control-column')
+        ], className='control-panel'),
         
-        # Publication Analysis Tab
-        dcc.Tab(label='Publication Explorer', children=[
-            html.Div([
-                html.Div([
-                    html.Label("Keyword Search:", className='control-label'),
-                    dcc.Input(
-                        id='keyword-input',
-                        type='text',
-                        placeholder='Enter research keyword...',
-                        className='keyword-input'
-                    )
-                ], className='search-column'),
-                
-                html.Div([
-                    html.Label("Publications to Show:", className='control-label'),
-                    dcc.Slider(
-                        id='pub-count-slider',
-                        min=5,
-                        max=100,
-                        step=5,
-                        value=25,
-                        marks={i: str(i) for i in range(5, 105, 20)}
-                    )
-                ], className='control-column')
-            ], className='control-panel'),
-            
-            dcc.Graph(id='publication-scores-chart'),
-            html.Div(id='publication-meta', className='stats-panel')
-        ])
+        dcc.Graph(id='publication-scores-chart'),
+        html.Div(id='publication-meta', className='stats-panel')
     ])
+  ])
 ], style={'fontFamily': 'Arial, sans-serif'})
 
 # Shared Database function
@@ -132,83 +75,6 @@ def execute_query(query, params=None):
         if mysql and hasattr(mysql, 'connection'):
             mysql.close()
 
-# Keyword Analysis Functions
-def get_filtered_keywords(filters):
-    """Dynamic score aggregation based on entity filters"""
-    base_query = """
-        SELECT k.name, {metric} AS value
-        FROM keyword k
-        {joins}
-        WHERE {conditions}
-        GROUP BY k.name
-        ORDER BY value DESC
-        LIMIT %s
-    """
-    
-    metric = "COUNT(*)"  # Default faculty metric
-    joins = []
-    conditions = ["1=1"]  # Default condition
-    params = []
-    limit = filters.get('limit', 15)
-
-    # Entity-specific score aggregation
-    if filters.get('publications'):
-        metric = "SUM(pk.score)"
-        joins.extend([
-            "JOIN Publication_Keyword pk ON k.id = pk.keyword_id",
-            "JOIN publication p ON pk.publication_id = p.id"
-        ])
-        conditions.append("p.title IN %s")
-        params.append(tuple(filters['publications']))
-        
-    elif filters.get('professors'):
-        metric = "SUM(fk.score)"
-        joins.extend([
-            "JOIN faculty_keyword fk ON k.id = fk.keyword_id",
-            "JOIN faculty f ON fk.faculty_id = f.id"
-        ])
-        conditions.append("f.name IN %s")
-        params.append(tuple(filters['professors']))
-        
-    elif filters.get('universities'):
-        joins.extend([
-            "JOIN faculty_keyword fk ON k.id = fk.keyword_id",
-            "JOIN faculty f ON fk.faculty_id = f.id",
-            "JOIN university u ON f.university = u.id"
-        ])
-        conditions.append("u.name IN %s")
-        params.append(tuple(filters['universities']))
-        
-    else:  # Cross-entity aggregation
-        if filters['scope'] == 'faculty':
-            joins.append("JOIN faculty_keyword fk ON k.id = fk.keyword_id")
-            metric = "SUM(fk.score)"
-        elif filters['scope'] == 'publication':
-            joins.append("JOIN Publication_Keyword pk ON k.id = pk.keyword_id")
-            metric = "SUM(pk.score)"
-        else:  # Global aggregation
-            return execute_query("""
-                SELECT name, SUM(score) AS value FROM (
-                    SELECT k.name, fk.score 
-                    FROM faculty_keyword fk
-                    JOIN keyword k ON fk.keyword_id = k.id
-                    UNION ALL
-                    SELECT k.name, pk.score
-                    FROM Publication_Keyword pk
-                    JOIN keyword k ON pk.keyword_id = k.id
-                ) AS combined
-                GROUP BY name
-                ORDER BY value DESC
-                LIMIT %s
-            """, (limit,))
-    
-    query = base_query.format(
-        metric=metric,
-        joins="\n".join(joins),
-        conditions=" AND ".join(conditions)
-    )
-    return execute_query(query, tuple(params) + (limit,))
-
 # Publication Analysis Functions
 def get_top_publications(keyword, top_n):
     """Retrieve publications with highest keyword relevance"""
@@ -229,81 +95,6 @@ def get_top_publications(keyword, top_n):
 	LIMIT %s;
     """
     return execute_query(query, (keyword, top_n))
-
-# Callbacks for Keyword Analysis Tab
-@app.callback(
-    [Output('university-filter', 'options'),
-     Output('professor-filter', 'options'),
-     Output('publication-filter', 'options')],
-    Input('scope-selector', 'value')
-)
-
-def populate_filters(_):
-    # Add error handling and case normalization
-    def safe_query(query, col_name='name'):
-        try:
-            df = execute_query(query)
-            if not df.empty:
-                return [{'label': v, 'value': v} for v in df[col_name].str.strip().str.title()]
-            return []
-        except Exception as e:
-            print(f"Filter population error: {str(e)}")
-            return []
-
-    return (
-        safe_query("SELECT name FROM university", 'name'),
-        safe_query("SELECT name FROM faculty", 'name'),
-        safe_query("SELECT title FROM publication", 'title')
-    )
-
-@app.callback(
-    [Output('keyword-visualization', 'figure'),
-     Output('context-stats', 'children')],
-    [Input('scope-selector', 'value'),
-     Input('top-n-selector', 'value'),
-     Input('university-filter', 'value'),
-     Input('professor-filter', 'value'),
-     Input('publication-filter', 'value')]
-)
-
-def update_keyword_analysis(scope, limit, universities, professors, publications):
-    filters = {
-        'scope': scope,
-        'limit': limit,
-        'universities': universities,
-        'professors': professors,
-        'publications': publications
-    }
-    
-    df = get_filtered_keywords(filters)
-    
-    fig = px.treemap(
-        df,
-        path=['name'],
-        values='value',
-        color='value',
-        color_continuous_scale='Teal',
-        title='Keyword Impact Distribution',
-        labels={'value': 'Aggregated Score', 'name': 'Keyword'}
-    )
-    
-    stats = [
-        html.H5("Aggregation Context:", className="stats-header"),
-        html.P(f"Total Keywords: {len(df):,}", className="stat-item"),
-        html.P(f"Score Range: {df['value'].min():.1f} - {df['value'].max():.1f}", className="stat-item"),
-        html.P(f"75th Percentile Score: {df['value'].quantile(0.75):.1f}", className="stat-item"),
-        html.Div([
-            html.Span("Dominant Entities:", className="stat-label"),
-            html.Ul([
-                html.Li(f"Publications: {len(filters['publications'])}" if filters['publications'] else "All Publications"),
-                html.Li(f"Professors: {len(filters['professors'])}" if filters['professors'] else "All Faculty"),
-                html.Li(f"Universities: {len(filters['universities'])}" if filters['universities'] else "All Institutions")
-            ], className="entity-list")
-        ], className="stat-item")
-    ]
-    
-    return fig, stats
-
 
 # Callbacks for Publication Analysis Tab
 @app.callback(
