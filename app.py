@@ -1,9 +1,9 @@
-# app.py - Academic Research Analytics Dashboard
+# app.py - Academic Research Analytics Dashboard (Modified Faculty Explorer)
 import dash
 from dash import dcc, html, Input, Output, State
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
 from mysql_utils import MySQLUtils
 
@@ -22,36 +22,40 @@ app.layout = html.Div([
     html.H1("Academic Research Analytics Dashboard", className='main-header'),
     
     dcc.Tabs([
-    #Faculty Explorder Tab
-    # Add to existing tabs list after Publication Explorer
-dcc.Tab(label='Faculty Explorer', children=[
-    html.Div([
-        html.Div([
-            html.Label("Search Faculty Expertise:", className='control-label'),
-            dcc.Input(
-                id='faculty-keyword-input',
-                type='text',
-                placeholder='Enter keyword...',
-                className='keyword-input'
-            )
-        ], className='search-column'),
-        
-        html.Div([
-            html.Label("Faculty to Display:", className='control-label'),
-            dcc.Slider(
-                id='faculty-count-slider',
-                min=5,
-                max=50,
-                step=5,
-                value=15,
-                marks={i: str(i) for i in range(5, 55, 10)}
-            )
-        ], className='control-column')
-    ], className='control-panel'),
-    
-    dcc.Graph(id='faculty-analysis-chart'),
-    html.Div(id='faculty-details', className='stats-panel')
-]),
+        # Modified Faculty Explorer Tab
+        dcc.Tab(label='Faculty Explorer', children=[
+            html.Div([
+                html.Div([
+                    html.Label("Search Faculty Expertise:", className='control-label'),
+                    dcc.Input(
+                        id='faculty-keyword-input',
+                        type='text',
+                        placeholder='Enter keyword...',
+                        className='keyword-input'
+                    )
+                ], className='search-column'),
+                
+                html.Div([
+                    html.Label("Results Limit:", className='control-label'),
+                    dcc.Slider(
+                        id='faculty-count-slider',
+                        min=5,
+                        max=50,
+                        step=5,
+                        value=15,
+                        marks={i: str(i) for i in range(5, 55, 10)}
+                    )
+                ], className='control-column')
+            ], className='control-panel'),
+            
+            # List and Details Container
+            html.Div([
+                html.Div(id='faculty-list-container', className='scrollable-list'),
+                html.Div(id='faculty-details-container', className='details-panel')
+            ], className='list-detail-container'),
+            
+            dcc.Store(id='faculty-cache-store')
+        ]),
 
     #Publication Explorer Tab
     dcc.Tab(label='Publication Explorer', children=[
@@ -81,12 +85,68 @@ dcc.Tab(label='Faculty Explorer', children=[
         
         dcc.Graph(id='publication-scores-chart'),
         html.Div(id='publication-meta', className='stats-panel')
+    ]),
+    # New University Analysis Tab
+    dcc.Tab(label='University Analysis', children=[
+        html.Div([
+            html.H3("University Research Strength Analyzer", className='tab-header'),
+            # Photo Card (new)
+            html.Div(
+                id='university-photo-card',
+                className='photo-card',
+                children=[
+                    html.Img(
+                        id='university-photo',
+                        className='university-photo',
+                        style={'display': 'none'}  # Hidden by default
+                    )
+                ]
+            ),
+	    # Control Panel
+            html.Div([
+                html.Div([
+                    html.Label("University Name:", className='control-label'),
+                    dcc.Input(
+                        id='university-tab-input',
+                        type='text',
+                        placeholder='Start typing university name...',
+                        className='university-input',
+                        debounce=True
+                    )
+                ], className='search-column'),
+                
+                html.Div([
+                    html.Label("Top Keywords to Display:", className='control-label'),
+                    dcc.Slider(
+                        id='university-tab-top-n',
+                        min=5,
+                        max=25,
+                        step=1,
+                        value=15,
+                        marks={i: {'label': str(i)} for i in range(5, 26, 5)},
+                        tooltip={"placement": "bottom"}
+                    )
+                ], className='control-column')
+            ], className='control-panel'),
+            
+            # Visualization Area
+            dcc.Graph(
+                id='university-tab-pie-chart',
+                config={'displayModeBar': False},
+                className='pie-container'
+            ),
+            
+            # Supplemental Info
+            html.Div(id='university-stats-panel', className='stats-panel')
+        ], className='university-tab-content')
     ])
-  ])
+
+        ])
 ], style={'fontFamily': 'Arial, sans-serif'})
 
 # Shared Database function
 def execute_query(query, params=None):
+    #print(query)
     """Universal query executor with enhanced error handling"""
     mysql = None  # Initialize outside try block to ensure variable existence
     try:
@@ -95,7 +155,7 @@ def execute_query(query, params=None):
             raise ConnectionError("Failed to connect to database")
             
         result = mysql.execute_query(query, params)
-#        print(pd.DataFrame(result))
+        #print(pd.DataFrame(result))
         return pd.DataFrame(result) if result else pd.DataFrame()
 
     except Exception as e:
@@ -105,17 +165,39 @@ def execute_query(query, params=None):
     finally:
         if mysql and hasattr(mysql, 'connection'):
             mysql.close()
-# Faculty Analysis Functions
-def get_top_faculty(search_term, top_n):
-    """Retrieve faculty with strongest keyword associations for specific keyword"""
+
+
+# Faculty Analysis Functions (modified)
+def get_faculty_list(search_term, limit):
+    """Retrieve simplified faculty list with basic info"""
     query = """
     SELECT 
         f.name,
         f.position,
-	f.photo_url,
         u.name AS university,
-        MAX(fk.score) AS keyword_score,  # Changed to MAX
-        k.name AS target_keyword,  # Explicitly show matched keyword
+        MAX(fk.score) AS keyword_score
+    FROM faculty f
+    JOIN faculty_keyword fk ON f.id = fk.faculty_id
+    JOIN keyword k ON fk.keyword_id = k.id
+    JOIN university u ON f.university_id = u.id
+    WHERE k.name LIKE %s
+    GROUP BY f.id, u.name
+    ORDER BY keyword_score DESC
+    LIMIT %s;
+    """
+    search_pattern = f"%{search_term}%"
+    return execute_query(query, (search_pattern, limit))
+
+def get_full_faculty_details(name):
+    """Retrieve complete details for selected faculty"""
+    query = """
+    SELECT 
+        f.name,
+        f.position,
+        f.photo_url,
+        u.name AS university,
+        MAX(fk.score) AS keyword_score,
+        k.name AS target_keyword,
         GROUP_CONCAT(DISTINCT k_all.name) AS related_keywords
     FROM faculty f
     JOIN faculty_keyword fk ON f.id = fk.faculty_id
@@ -123,13 +205,70 @@ def get_top_faculty(search_term, top_n):
     JOIN university u ON f.university_id = u.id
     LEFT JOIN faculty_keyword fk_all ON f.id = fk_all.faculty_id
     LEFT JOIN keyword k_all ON fk_all.keyword_id = k_all.id
-    WHERE k.name LIKE %s
-    GROUP BY f.id, u.name, k.name
-    ORDER BY keyword_score DESC
-    LIMIT %s;
+    WHERE f.name = %s
+    GROUP BY f.id, u.name, k.name;
     """
-    search_pattern = f"%{search_term}%"
-    return execute_query(query, (search_pattern, top_n))
+    return execute_query(query, (name,)).iloc[0]
+
+# Modified Faculty Callbacks
+@app.callback(
+    [Output('faculty-list-container', 'children'),
+     Output('faculty-cache-store', 'data')],
+    [Input('faculty-keyword-input', 'value'),
+     Input('faculty-count-slider', 'value')]
+)
+def update_faculty_list(search_input, limit):
+    if not search_input:
+        return html.Div("Enter a research keyword to begin search"), None
+    
+    df = get_faculty_list(search_input, limit)
+    if df.empty:
+        return html.Div(f"No results found for '{search_input}'"), None
+    
+    # Generate clickable list items
+    list_items = [
+        html.Li(
+            [
+                html.Div(
+                    [
+                        html.Strong(row['name']),
+                        html.Br(),
+                        html.Span(f"{row['position']} @ {row['university']}", 
+                                className='text-muted'),
+                        html.Div(f"Expertise Score: {row['keyword_score']:.2f}",
+                               className='score-indicator')
+                    ],
+                    className='list-item-content'
+                )
+            ],
+            className='faculty-list-item',
+            id={'type': 'faculty-name', 'index': row['name']},
+            n_clicks=0
+        ) for _, row in df.iterrows()
+    ]
+    
+    return html.Ul(list_items, className='faculty-list'), df.to_dict('records')
+
+@app.callback(
+    Output('faculty-details-container', 'children'),
+    [Input({'type': 'faculty-name', 'index': dash.dependencies.ALL}, 'n_clicks')],
+    [State('faculty-cache-store', 'data')]
+)
+def show_faculty_details(clicks, cached_data):
+    if not cached_data or not any(clicks):
+        return html.Div("Select a faculty member from the list to view details",
+                       className='placeholder-text')
+    
+    ctx = dash.callback_context
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    selected_name = eval(triggered_id)['index']
+    
+    try:
+        full_details = get_full_faculty_details(selected_name)
+        return create_faculty_card(full_details)
+    except Exception as e:
+        print(f"Detail retrieval error: {str(e)}")
+        return html.Div("Error loading faculty details", className='error-message')
 
 def create_faculty_card(faculty_row):
     """Generate detailed faculty profile card"""
@@ -156,6 +295,7 @@ def create_faculty_card(faculty_row):
         className='mb-3 shadow-sm'
     )
 
+
 # Publication Analysis Functions
 def get_top_publications(keyword, top_n):
     """Retrieve publications with highest keyword relevance"""
@@ -176,47 +316,6 @@ def get_top_publications(keyword, top_n):
 	LIMIT %s;
     """
     return execute_query(query, (keyword, top_n))
-
-# Callbacks for Faculty Analysis Tab
-@app.callback(
-    [Output('faculty-analysis-chart', 'figure'),
-     Output('faculty-details', 'children')],
-    [Input('faculty-keyword-input', 'value'),
-     Input('faculty-count-slider', 'value')]
-)
-def update_faculty_analysis(search_term, top_n):
-    if not search_term:
-        return px.scatter(title="Enter research domain to begin analysis"), ""
-    
-    df = get_top_faculty(search_term, top_n)
-    if df.empty:
-        return px.scatter(title=f"No faculty found for '{search_term}'"), ""
-    
-    # Visualization with enhanced styling
-    fig = px.bar(
-        df,
-        x='keyword_score',
-        y='name',
-        color='university',
-        hover_data=['university', 'position', 'related_keywords'],
-        labels={
-            'keyword_score': 'Keyword Score',
-            'name': 'Faculty Member',
-            'keyword_count': 'Related Keywords',
-            'position': 'Academic Position'
-        },
-        title=f"Top {top_n} Faculty in '{search_term.title()}' Domain"
-    )
-    fig.update_layout(
-        yaxis={'categoryorder': 'total ascending'},
-        hoverlabel=dict(bgcolor="white", font_size=12),
-        coloraxis_colorbar=dict(title="Keyword Count")
-    )
-
-    # Interactive detail cards
-    cards = [create_faculty_card(row) for _, row in df.iterrows()]
-    
-    return fig, cards
 
 # Callbacks for Publication Analysis Tab
 @app.callback(
@@ -264,16 +363,145 @@ def update_publication_analysis(keyword, top_n):
     ]
     
     return fig, stats
+    
+# security-enhanced database function
+def get_university_keyword_scores(university_name, top_n):
+    """Get aggregated keyword scores for a university's faculty"""
+    query = """
+    SELECT
+        k.name AS keyword,
+        SUM(fk.score) as total_score,
+        COUNT(DISTINCT f.id) as professor_count,
+        GROUP_CONCAT(DISTINCT f.name) as professors,
+        MAX(u.photo_url) as photo_url
+    FROM faculty f
+    JOIN faculty_keyword fk ON f.id = fk.faculty_id
+    JOIN keyword k ON fk.keyword_id = k.id
+    JOIN university u ON u.id = f.university_id
+    WHERE u.name LIKE %s
+    GROUP BY k.name
+    ORDER BY total_score DESC
+    LIMIT %s;
+    """
+    
+    return execute_query(query, (f"%{university_name.strip()}%", top_n))
 
+# accessibility-enhanced visualization
+def create_keyword_pie(df, university_name):
+    if df.empty:
+        return px.pie(title="No Data Available").update_layout(
+            annotations=[dict(text="No research data found", showarrow=False)]
+        )
 
+    fig = px.pie(
+        df,
+        names='keyword',
+        values='total_score',
+        hover_data=['professor_count', 'professors'],
+        title=f"Research Keywords Distribution at {university_name}",
+        hole=0.35,
+        labels={
+            'keyword': 'Research Area',
+            'total_score': 'Aggregated Score',
+            'professor_count': 'Professors'
+        },
+        color_discrete_sequence=px.colors.qualitative.Pastel
+    )
 
-# Style Configuration
-#app.css.append_css({
-#    'external_url': [
-#        'https://codepen.io/chriddyp/pen/bWLwgP.css',
-#        '/assets/custom.css'
-#    ]
-#})
+    fig.update_traces(
+        texttemplate='%{label}<br>%{percent}',
+        hovertemplate=(
+            "<b>%{label}</b><br>"
+            "Total Score: %{value}<br>"
+            "Professors: %{customdata[0]}<br>"
+            "Contributors: %{customdata[1]}<br>"
+            "<extra></extra>"
+        ),
+        marker=dict(line=dict(color='#ffffff', width=1))
+    )
+
+    fig.update_layout(
+        uniformtext_minsize=12,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.3,
+            xanchor="center",
+            x=0.5
+        ),
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=14
+        )
+    )
+    
+    return fig
+
+# secured callback with validation
+@app.callback(
+    [Output('university-tab-pie-chart', 'figure'),
+     Output('university-stats-panel', 'children'),
+     Output('university-photo', 'src'),
+     Output('university-photo', 'style')],
+    [Input('university-tab-input', 'value'),
+     Input('university-tab-top-n', 'value')]
+)
+
+def update_university_tab(name_input, top_n=10):
+    # Input validation
+    if not name_input or len(name_input.strip()) < 3:
+        raise PreventUpdate
+    
+    try:
+        top_n = int(top_n)
+        top_n = max(1, min(top_n, 50))  # Enforce 1-50 range
+    except (TypeError, ValueError):
+        top_n = 10
+
+    clean_name = name_input.strip().title()
+    df = get_university_keyword_scores(clean_name, top_n)
+
+    if df.empty:
+        return (
+            px.pie(title=f"No Data Found").update_layout(
+                annotations=[dict(text=f"No results for '{clean_name}'", showarrow=False)]
+            ),
+            html.Div(
+                "Please verify the university name",
+                className='error-message',
+                style={'color': '#dc3545'}
+            )
+        )
+    # Extract photo URL from first result
+    photo_url = df.iloc[0]['photo_url'] if 'photo_url' in df.columns else None
+    # Generate visualization
+    pie_fig = create_keyword_pie(df, clean_name)
+    
+    # Create sanitized stats panel
+    stats_content = html.Div([
+        html.H4(f"{clean_name} Research Summary", className='summary-title'),
+        html.Div([
+            html.Div([
+                html.Span("Total Keywords Analyzed:", className='stat-label'),
+                html.Span(f"{len(df)}", className='stat-value')
+            ], className='stat-item'),
+            html.Div([
+                html.Span("Average Score:", className='stat-label'),
+                html.Span(f"{df['total_score'].mean():.1f}", className='stat-value')
+            ], className='stat-item'),
+            html.Div([
+                html.Span("Top Research Area:", className='stat-label'),
+                html.Span(df.iloc[0]['keyword'], className='stat-value')
+            ], className='stat-item')
+        ], className='stats-grid')
+    ])
+    
+    # Show/hide photo based on availability
+    photo_style = {'height': '200px', 'objectFit': 'cover'} if photo_url else {'display': 'none'}
+    
+    return pie_fig, stats_content, photo_url, photo_style
 
 if __name__ == '__main__':
-    app.run(debug=True, dev_tools_hot_reload = False, port=8050)
+    app.run(debug=True, dev_tools_hot_reload=False, port=8050)
+
+

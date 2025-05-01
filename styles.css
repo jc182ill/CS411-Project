@@ -1,0 +1,66 @@
+.list-detail-container {
+    display: grid;
+    grid-template-columns: 35% 65%;
+    gap: 20px;
+    height: 600px;
+}
+
+.scrollable-list {
+    overflow-y: auto;
+    border-right: 1px solid #ddd;
+    padding-right: 15px;
+}
+
+.faculty-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.faculty-list-item {
+    padding: 15px;
+    margin-bottom: 10px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+    cursor: pointer;
+}
+
+.faculty-list-item:hover {
+    transform: translateX(5px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.details-panel {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.score-indicator {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.visualization-container {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 20px;
+    align-items: start;
+}
+
+.photo-card {
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    padding: 15px;
+}
+
+.university-photo {
+    width: 100%;
+    border-radius: 5px;
+    aspect-ratio: 16/9;
+}
+
