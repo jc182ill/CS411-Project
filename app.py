@@ -53,14 +53,16 @@ app.layout = html.Div([
                 
                 html.Div([
                     html.Label("Results Limit:", className='control-label'),
-                    dcc.Slider(
-                        id='faculty-count-slider',
-                        min=5,
-                        max=50,
-                        step=5,
-                        value=15,
-                        marks={i: str(i) for i in range(5, 55, 10)}
-                    )
+                dcc.Input(
+                    id='faculty-count-input',
+                    type='number',
+                    value=10,
+                    min=1,
+                    max=1000,
+                    step=1,
+                    debounce=True,  
+                    style={'width': '100px'}
+                )
                 ], className='control-column')
             ], className='control-panel'),
             
@@ -87,13 +89,15 @@ app.layout = html.Div([
              ], className='search-column'),
             html.Div([
                 html.Label("Publications to Show:", className='control-label'),
-                dcc.Slider(
-                    id='pub-count-slider',
-                    min=5,
-                    max=100,
-                    step=5,
-                    value=25,
-                    marks={i: str(i) for i in range(5, 105, 20)}
+                dcc.Input(
+                    id='pub-count-input',
+                    type='number',
+                    value=20,
+                    min=1,
+                    max=1000,
+                    step=1,
+                    debounce=True,  
+                    style={'width': '100px'}
                 )
             ], className='control-column')
         ], className='control-panel'),
@@ -132,26 +136,29 @@ app.layout = html.Div([
                 ], className='search-column'),
                 
                 html.Div([
-                    html.Label("Top Keywords to Display:", className='control-label'),
-                    dcc.Slider(
+                    html.Label("Top Keywords to Display (up to 20):", className='control-label'),
+                    dcc.Input(
                         id='university-tab-top-n',
-                        min=5,
-                        max=25,
+                        type='number',
+                        value=10,
+                        min=1,
+                        max=20,
                         step=1,
-                        value=15,
-                        marks={i: {'label': str(i)} for i in range(5, 26, 5)},
-                        tooltip={"placement": "bottom"}
+                        debounce=True,  
+                        style={'width': '100px'}
                     )
                 ], className='control-column')
             ], className='control-panel'),
             
             # Visualization Area
-            dcc.Graph(
-                id='university-tab-pie-chart',
-                config={'displayModeBar': False},
-                className='pie-container'
-            ),
-            
+            dbc.Row([
+                dbc.Col(
+                    dcc.Graph(id='university-tab-pie-chart', config={'displayModeBar': False}, className='pie-container'), style={'height': '500px'}),
+                dbc.Col(
+                html.Div(id='university-keyword-list', style={'overflowY': 'auto', 'maxHeight': '500px'}),
+                width=6
+               )
+           ]),            
             # Supplemental Info
             html.Div(id='university-stats-panel', className='stats-panel')
         ], className='university-tab-content')
@@ -167,27 +174,40 @@ app.layout = html.Div([
 		    debounce=True,  # Prevents rapid firing
 		    style={'width': '100%', 'padding': '10px'}
 		),
+		dcc.Dropdown(
+                    id='keyword-filter-type',
+                    options=[
+                        {'label': 'Both Faculty and Publications', 'value': 'both'},
+                        {'label': 'Faculty Only', 'value': 'faculty'},
+                        {'label': 'Publications Only', 'value': 'publication'}
+                    ],
+                    value='both',
+                    clearable=False,
+                    style={'width': '300px', 'marginTop': '10px'}
+                ),
 		html.Div([
 		    html.Label("Minimum Connections:", className='control-label'),
-		    dcc.Slider(
-		        id='connection-threshold',
-		        min=2,
-		        max=20,
-		        step=2,
-		        value=3,
-		        marks={i: str(i) for i in range(2, 21)},
-		        tooltip={"placement": "bottom"}
-		    )
+		    dcc.Input(
+                        id='connection-threshold',
+                        type='number',
+                        value=2,
+                        min=1,
+                        max=1000,
+                        step=1,
+                        debounce=True,  
+                        style={'width': '100px'}
+                    )
 		], className='threshold-control')
 	    ], className='control-bar'),
 	    dcc.Graph(
 		id='keyword-network',
+		style={'height': '900px', 'width': '100%'},
 		config={'displayModeBar': False},
 		className='network-graph'
-	    )
+	    ), 
 	], className='similarity-widget')
     ]),
-    dcc.Tab(label='Admin Editor', children=[
+    dcc.Tab(label='Database Editor', children=[
     html.Div([
         html.H3("Data Override & Approval Panel"),
 
@@ -224,8 +244,8 @@ app.layout = html.Div([
 	dcc.Tab(label='Keyword Matcher', children=[
 	    html.Div([
 		html.H3("Keyword Relevance Matcher"),
-		dcc.Input(id='kw-match-input', type='text', placeholder='Enter comma-separated keywords...'),
-		dcc.Slider(id='kw-match-limit', min=5, max=50, value=10, step=5, marks={i: str(i) for i in range(5, 55, 5)}),
+		dcc.Input(id='kw-match-input', type='text', placeholder='Enter comma-separated keywords...'),		
+                dcc.Input(id='kw-match-limit', type='number', value=10, min=1, max=1000, step=1, debounce=True, style={'width': '100px'}),
 		html.Button("Find Matches", id='kw-match-btn'),
 		html.Div(id='kw-match-status', style={'marginTop': '10px'}),
 		html.H4("Top Professors"),
@@ -272,7 +292,7 @@ def execute_query(query, params=None, db_type='mysql'):
             records = n4j.execute_query(query, params)
             # Convert Neo4j records to DataFrame
             data = [dict(rec) for rec in records]
-            print(pd.DataFrame(data))
+            #print(pd.DataFrame(data))
             return pd.DataFrame(data)
                 
         except Exception as e:
@@ -365,7 +385,7 @@ def get_full_faculty_details(name):
     [Output('faculty-list-container', 'children'),
      Output('faculty-cache-store', 'data')],
     [Input('faculty-keyword-input', 'value'),
-     Input('faculty-count-slider', 'value')]
+     Input('faculty-count-input', 'value')]
 )
 def update_faculty_list(search_input, limit):
     if not search_input:
@@ -518,7 +538,7 @@ def clean_author_name(name):
     [Output('publication-scores-chart', 'figure'),
      Output('publication-meta', 'children')],
     [Input('publication-keyword-input', 'value'),
-     Input('pub-count-slider', 'value')]
+     Input('pub-count-input', 'value')]
 )
 def update_publication_analysis(keyword, top_n):
     if not keyword:
@@ -658,19 +678,21 @@ def create_keyword_pie(df, university_name):
     )
 
     fig.update_layout(
-        uniformtext_minsize=12,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.3,
-            xanchor="center",
-            x=0.5
-        ),
-        hoverlabel=dict(
-            bgcolor="white",
-            font_size=14
-        )
-    )
+    uniformtext_minsize=12,
+    legend=dict(
+        orientation="v",       # Vertical layout
+        yanchor="top",
+        y=1,
+        xanchor="left",
+        x=1.05,                # Shift to the right of the pie chart
+        font=dict(size=12)
+    ),
+    hoverlabel=dict(
+        bgcolor="white",
+        font_size=14
+    ),
+    margin=dict(l=40, r=120, t=40, b=40)  # Add right margin to make room for legend
+)
     
     return fig
 
@@ -721,9 +743,9 @@ def update_university_tab(name_input, top_n=10):
                 html.Span(f"{total_keywords}", className='stat-value')
             ], className='stat-item'),
             html.Div([
-                html.Span("Average Score:", className='stat-label'),
-                html.Span(f"{df['total_score'].mean():.1f}", className='stat-value')
-            ], className='stat-item'),
+                html.Span("Total Score:", className='stat-label'),
+                html.Span(f"{df['total_score'].sum()}", className='stat-value')
+            ], className = 'stat-item'),
             html.Div([
                 html.Span("Top Research Area:", className='stat-label'),
                 html.Span(df.iloc[0]['keyword'], className='stat-value')
@@ -735,7 +757,7 @@ def update_university_tab(name_input, top_n=10):
 
     return pie_fig, stats_content, photo_url, photo_style
     
-def find_similar_keywords(keyword: str, min_connections: int = 3) -> list:
+def find_similar_keywords(keyword: str, min_connections: int = 3, filter_type: str = "both") -> list:
     """
     Returns a list of keywords that share at least `min_connections` professors or publications
     with the input keyword.
@@ -769,6 +791,10 @@ def find_similar_keywords(keyword: str, min_connections: int = 3) -> list:
     }
 
     df = execute_query(query=query, params=params, db_type='neo4j')
+    if filter_type == 'faculty':
+        df = df[df['viaEntities'].apply(lambda entities: 'Faculty' in entities)]
+    elif filter_type == 'publication':
+        df = df[df['viaEntities'].apply(lambda entities: 'Publication' in entities)]
 
     if df.empty:
         return []
@@ -793,60 +819,64 @@ def empty_figure(message: str = "No data available") -> go.Figure:
     return fig
     
 def create_network_graph(nodes, links, root_keyword):
+
     # Create graph object
     G = nx.Graph()
 
-    # Add nodes
+    # Add nodes with metadata
     for node in nodes:
-        G.add_node(node['id'], size=node['size'])
+        G.add_node(node['id'], size=node['size'], score=node.get('score', 0))
 
-    # Add edges
+    # Add edges with metadata
     for link in links:
         G.add_edge(link['source'], link['target'], weight=link['value'], label=link['type'])
 
-    # Positioning with spring layout
+    # Layout for visualization
     pos = nx.spring_layout(G, seed=42)
 
-    # Extract node and edge data
+    # Edges for visualization
     edge_x = []
     edge_y = []
     edge_text = []
-
     for edge in G.edges(data=True):
         x0, y0 = pos[edge[0]]
         x1, y1 = pos[edge[1]]
         edge_x += [x0, x1, None]
         edge_y += [y0, y1, None]
-        edge_text.append(f"{edge[0]} ⇄ {edge[1]}<br>Type: {edge[2]['label']}")
+        edge_text.append(f"{edge[0]} ⇄ {edge[1]}<br>Type: {edge[2]['label']}<br>Strength: {edge[2]['weight']}")
 
+    # Nodes for visualization
     node_x = []
     node_y = []
     node_size = []
     node_text = []
-
     for node in G.nodes(data=True):
         x, y = pos[node[0]]
         node_x.append(x)
         node_y.append(y)
-        node_size.append(node[1]['size'])
-        node_text.append(node[0])
+        node_size.append(node[1]['score'])
+        hover_info = f"{node[0]}<br>Connection Strength: {node[1].get('score', 0)}"
+        node_text.append(hover_info)
 
-    # Create figure
+    # Build figure
     fig = go.Figure()
 
-    # Add edges
+    # Edge trace
     fig.add_trace(go.Scatter(
         x=edge_x, y=edge_y,
+        mode='lines',
         line=dict(width=1, color='gray'),
         hoverinfo='text',
-        mode='lines'
+        text=edge_text,
+        name='Edges'
     ))
 
-    # Add nodes
+    # Node trace
     fig.add_trace(go.Scatter(
         x=node_x, y=node_y,
         mode='markers+text',
-        text=node_text,
+        text=[n['id'] for n in nodes],
+        hovertext=node_text,
         textposition='top center',
         hoverinfo='text',
         marker=dict(
@@ -875,25 +905,24 @@ def create_network_graph(nodes, links, root_keyword):
 # Callback Logic
 @app.callback(
     Output('keyword-network', 'figure'),
-   [Input('keyword-input', 'value'),  # Keyword entry
-     Input('connection-threshold', 'value')], 
+    [Input('keyword-input', 'value'),
+     Input('connection-threshold', 'value'),
+     Input('keyword-filter-type', 'value')],
     prevent_initial_call=True
 )
-def update_keyword_network(selected_keyword, min_conn):
+def update_keyword_network(selected_keyword, min_conn, filter_type):
     if not selected_keyword:
         return empty_figure("Select a keyword to begin analysis")
     
-    results = find_similar_keywords(selected_keyword, min_conn)
+    results = find_similar_keywords(selected_keyword, min_conn, filter_type)
     
     if not results:
         return empty_figure("No significant connections found")
     
-    # Visualization processing
-    nodes = [{'id': selected_keyword, 'size': 40}] + [
-        {'id': kw['keyword'], 'size': 20 + kw['totalScore']*2}
+    nodes = [{'id': selected_keyword, 'size': 40, 'score': 0}] + [
+        {'id': kw['keyword'], 'size': 20, 'score': kw['totalScore']}
         for kw in results
-    ]
-    
+    ]    
     links = [{
         'source': selected_keyword,
         'target': kw['keyword'],
@@ -1123,7 +1152,7 @@ def display_clicked_faculty_from_match(clicks):
     [Input('kw-match-btn', 'n_clicks'),
      Input({'type': 'kwmatch-faculty-name', 'index': dash.dependencies.ALL}, 'n_clicks')],
     [State('kw-match-input', 'value'),
-     State('kw-match-limit', 'value')]
+     State('kw-match-limit', 'value'),]
 )
 def keyword_match(btn_clicks, faculty_clicks, keyword_input, limit):
     ctx = dash.callback_context
