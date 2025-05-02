@@ -4,12 +4,14 @@ from dash import dcc, html, Input, Output, State
 from dash.exceptions import PreventUpdate
 from datetime import datetime
 from bson import ObjectId
+from collections import Counter
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import networkx as nx
 import json
+import re
 from neo4j import GraphDatabase
 from mysql_utils import MySQLUtils
 from mongodb_utils import MongoDBUtils
@@ -82,8 +84,7 @@ app.layout = html.Div([
                     placeholder='Enter research keyword...',
                     className='keyword-input'
                 )
-            ], className='search-column'),
-            
+             ], className='search-column'),
             html.Div([
                 html.Label("Publications to Show:", className='control-label'),
                 dcc.Slider(
@@ -96,9 +97,10 @@ app.layout = html.Div([
                 )
             ], className='control-column')
         ], className='control-panel'),
-        
+
         dcc.Graph(id='publication-scores-chart'),
-        html.Div(id='publication-meta', className='stats-panel')
+        html.Div(id='publication-meta', className='stats-panel'),
+        html.Div(id='publication-detail-card', className='detail-panel')
     ]),
     # New University Analysis Tab
     dcc.Tab(label='University Analysis', children=[
@@ -284,7 +286,8 @@ def execute_query(query, params=None, db_type='mysql'):
 def get_faculty_list(search_term, limit):
     """Retrieve simplified faculty list with basic info"""
     query = """
-    SELECT 
+    SELECT
+        f.id, 
         f.name,
         f.position,
         u.name AS university,
@@ -302,9 +305,10 @@ def get_faculty_list(search_term, limit):
     return execute_query(query, (search_pattern, limit))
 
 def get_full_faculty_details(name):
-    """Retrieve complete faculty profile including contact info and research interest"""
-    query = """
-    SELECT 
+    """Retrieve full faculty profile with top keywords by score"""
+    profile_query = """
+    SELECT
+        f.id, 
         f.name,
         f.position,
         f.photo_url,
@@ -321,11 +325,40 @@ def get_full_faculty_details(name):
     JOIN university u ON f.university_id = u.id
     LEFT JOIN faculty_keyword fk_all ON f.id = fk_all.faculty_id
     LEFT JOIN keyword k_all ON fk_all.keyword_id = k_all.id
-    WHERE f.name = %s
+    WHERE f.id = %s
     GROUP BY f.id, u.name, k.name;
-    """
-    return execute_query(query, (name,)).iloc[0]
 
+    """
+
+    keywords_query = """
+    SELECT k.name, fk.score
+    FROM faculty_keyword fk
+    JOIN keyword k ON fk.keyword_id = k.id
+    WHERE fk.faculty_id = %s
+    ORDER BY fk.score DESC
+    LIMIT 10;
+    """
+
+    publications_query = """
+    SELECT p.title, p.venue, p.year, p.num_citations
+    FROM faculty_publication fp
+    JOIN publication p ON fp.publication_id = p.id
+    WHERE fp.faculty_id = %s
+    ORDER BY p.year DESC
+    LIMIT 5;
+    """
+
+    profile_df = execute_query(profile_query, (name,))
+    keywords_df = execute_query(keywords_query, (name,))
+    pubs_df = execute_query(publications_query, (name,))
+
+    if profile_df.empty:
+        raise ValueError("Faculty not found.")
+
+    profile = profile_df.iloc[0].to_dict()
+    profile['top_keywords'] = keywords_df.to_dict('records') if not keywords_df.empty else []
+    profile["matched_publications"] = pubs_df.to_dict('records') if pubs_df is not None and not pubs_df.empty else []
+    return profile
 
 # Modified Faculty Callbacks
 @app.callback(
@@ -352,14 +385,14 @@ def update_faculty_list(search_input, limit):
                         html.Br(),
                         html.Span(f"{row['position']} @ {row['university']}", 
                                 className='text-muted'),
-                        html.Div(f"Expertise Score: {row['keyword_score']:.2f}",
+                        html.Div(f"Keyword Score: {row['keyword_score']}",
                                className='score-indicator')
                     ],
                     className='list-item-content'
                 )
             ],
             className='faculty-list-item',
-            id={'type': 'faculty-name', 'index': row['name']},
+            id={'type': 'faculty-name', 'index': row['id']},
             n_clicks=0
         ) for _, row in df.iterrows()
     ]
@@ -388,7 +421,15 @@ def show_faculty_details(clicks, cached_data):
         return html.Div("Error loading faculty details", className='error-message')
 
 def create_faculty_card(faculty_row):
-    """Generate detailed faculty profile card"""
+    """Generate detailed faculty profile card with contact info, keywords, and relevant publications"""
+    keyword_items = [html.Li(f"{kw['name']} — Score: {kw['score']:.2f}")
+                     for kw in faculty_row.get('top_keywords', [])]
+
+    publication_items = [
+        html.Li(f"{pub['title']} ({pub['venue']}, {pub['year']}) — Citations: {pub['num_citations']}")
+        for pub in faculty_row.get("matched_publications", [])
+    ]
+
     return dbc.Card(
         [
             dbc.Row([
@@ -407,7 +448,10 @@ def create_faculty_card(faculty_row):
                     html.P(f"Email: {faculty_row.get('email', 'N/A')}"),
                     html.P(f"Phone: {faculty_row.get('phone', 'N/A')}"),
                     html.P(f"Research Interests: {faculty_row.get('research_interest', 'N/A')}"),
-                    html.P(f"Keyword Score: {faculty_row['keyword_score']:.2f}"),
+                    html.H5("Top Keywords"),
+                    html.Ul(keyword_items),
+                    html.H5("Publications"),
+                    html.Ul(publication_items if publication_items else [html.Li("None found")]),
                     html.Hr()
                 ], width=9)
             ])
@@ -415,27 +459,59 @@ def create_faculty_card(faculty_row):
         className='mb-3 shadow-sm'
     )
 
+def create_publication_card(pub_row):
+    """Generate a card with publication metadata and author/keyword details."""
+    raw_authors = pub_row.get("authors", [])
+    cleaned_authors = [clean_author_name(a) for a in raw_authors if a and clean_author_name(a).lower() not in ['ph.d.', 'phd', 'dr.', 'dr']]
+    authors = html.Ul([html.Li(a) for a in cleaned_authors]) if cleaned_authors else html.P("No authors listed.")
+
+    keywords = html.Ul([html.Li(k) for k in pub_row.get("keywords", [])])
+
+    return dbc.Card(
+        dbc.CardBody([
+            html.H4(pub_row["title"], className="card-title"),
+            html.P(f"Venue: {pub_row['venue']}"),
+            html.P(f"Year: {pub_row['year']}"),
+            html.P(f"Citations: {pub_row['num_citations']}"),
+            html.H5("Authors"),
+            authors,
+            html.H5("Keywords"),
+            keywords
+        ]),
+        className="mt-3 shadow-sm"
+    )
 
 # Publication Analysis Functions
 def get_top_publications(keyword, top_n):
-    """Retrieve publications with highest keyword relevance"""
+    """Retrieve publications with highest keyword relevance and extra metadata"""
     query = """
-	SELECT p.title,
-        pk.score AS keyword_score,  -- Direct score from junction table
-        p.num_citations,
+    SELECT 
+        p.id,
+        p.title,
+        p.venue,
         p.year,
-        GROUP_CONCAT(DISTINCT f.name) AS authors
-	FROM publication p
-	JOIN Publication_Keyword pk ON p.id = pk.publication_id
-	JOIN keyword k ON pk.keyword_id = k.id
-	LEFT JOIN faculty_publication fp ON p.id = fp.publication_id
-	LEFT JOIN faculty f ON fp.faculty_id = f.id
-	WHERE k.name = %s
-	GROUP BY p.id, pk.score, p.title, p.year, p.num_citations  -- Added pk.score to GROUP BY
-	ORDER BY keyword_score DESC
-	LIMIT %s;
+        p.num_citations,
+        MAX(pk.score) AS keyword_score,
+        GROUP_CONCAT(DISTINCT f.name) AS authors,
+        GROUP_CONCAT(DISTINCT k_all.name) AS keywords
+    FROM publication p
+    JOIN Publication_Keyword pk ON p.id = pk.publication_id
+    JOIN keyword k ON pk.keyword_id = k.id
+    LEFT JOIN Publication_Keyword pk_all ON p.id = pk_all.publication_id
+    LEFT JOIN keyword k_all ON pk_all.keyword_id = k_all.id
+    LEFT JOIN faculty_publication fp ON p.id = fp.publication_id
+    LEFT JOIN faculty f ON fp.faculty_id = f.id
+    WHERE k.name = %s
+    GROUP BY p.id
+    ORDER BY keyword_score DESC
+    LIMIT %s;
     """
     return execute_query(query, (keyword, top_n))
+
+def clean_author_name(name):
+    # Remove common suffixes like ", Ph.D.", "PhD", "Dr.", etc.
+    name = re.sub(r',?\s*(Ph\.?D\.?|Dr\.?|M\.?D\.?)$', '', name, flags=re.IGNORECASE)
+    return name.strip()
 
 # Callbacks for Publication Analysis Tab
 @app.callback(
@@ -447,42 +523,84 @@ def get_top_publications(keyword, top_n):
 def update_publication_analysis(keyword, top_n):
     if not keyword:
         return px.scatter(title="Enter a keyword to begin analysis"), ""
-    
+
     df = get_top_publications(keyword, top_n)
     if df.empty:
         return px.scatter(title=f"No publications found for '{keyword}'"), ""
-    
-    # Visualization updates
-    fig = px.bar(
+
+    # Pre-process authors/keywords for card display
+    df["authors"] = df["authors"].fillna("").apply(lambda a: a.split(','))
+    df["keywords"] = df["keywords"].fillna("").apply(lambda k: k.split(','))
+
+    # Scatter Plot: X = year, Y = score
+    fig = px.scatter(
         df,
-        x='keyword_score',
-        y='title',
-        color='year',
-        hover_data=['authors', 'num_citations'],  # Changed 'citations' → 'num_citations'
+        x="year",
+        y="keyword_score",
+        hover_name="title",
+        size_max=10,
         labels={
-            'keyword_score': 'Keyword Relevance Score',
-            'title': 'Publication Title',
-            'year': 'Publication Year',
-            'authors': 'Authors',
-            'num_citations': 'Citations'  # Label mapping update
+            "keyword_score": "Keyword Relevance",
+            "year": "Publication Year"
         },
         title=f"Top {top_n} Publications for '{keyword.title()}'"
-    )
-    fig.update_layout(
-        yaxis={'categoryorder': 'total ascending'},
-        hovermode='closest'
-    )
+    )    
+    
+    fig.update_xaxes(categoryorder='category ascending')  # ✅ Ensures year is sorted
+    fig.update_traces(marker=dict(size=10), mode='markers')
+    fig.update_layout(clickmode='event+select')
+    author_series = df.explode("authors")["authors"].dropna().apply(clean_author_name)
+    most_common_author = author_series.mode()[0] if not author_series.empty else "N/A"
+    author_counts = Counter(author_series)
+    top_authors = author_counts.most_common(5)
 
-    # Metadata updates
+    # Insights summary
     stats = [
         html.H4("Analysis Insights:"),
         html.P(f"Median Keyword Score: {df['keyword_score'].median():.1f}"),
-        html.P(f"Total Citations Across Selection: {df['num_citations'].sum()}"),  # Field name update
-        html.P(f"Publication Span: {df['year'].min()} - {df['year'].max()}"),
-        html.P(f"Most Frequent Author: {df['authors'].str.split(', ').explode().mode()[0]}")  # Improved author parsing
+        html.P(f"Total Citations: {df['num_citations'].sum()}"),
+        html.P(f"Year Range: {df['year'].min()} - {df['year'].max()}"),
+        html.P("Top Authors:"),
+        html.Ul([
+            html.Li(f"{author} — {count} publication(s)")
+            for author, count in top_authors
+         ]) if top_authors else html.P("No authors found.")
     ]
-    
+
     return fig, stats
+    
+@app.callback(
+    Output('publication-detail-card', 'children'),
+    Input('publication-scores-chart', 'clickData'),
+    prevent_initial_call=True
+)
+def display_publication_card(clickData):
+    if not clickData:
+        raise PreventUpdate
+
+    title = clickData['points'][0]['hovertext']
+    query = """
+    SELECT 
+        p.title, p.venue, p.year, p.num_citations,
+        GROUP_CONCAT(DISTINCT f.name) AS authors,
+        GROUP_CONCAT(DISTINCT k.name) AS keywords
+    FROM publication p
+    LEFT JOIN faculty_publication fp ON p.id = fp.publication_id
+    LEFT JOIN faculty f ON fp.faculty_id = f.id
+    LEFT JOIN Publication_Keyword pk ON p.id = pk.publication_id
+    LEFT JOIN keyword k ON pk.keyword_id = k.id
+    WHERE p.title = %s
+    GROUP BY p.id;
+    """
+    df = execute_query(query, (title,))
+    if df.empty:
+        return html.Div("No details available.")
+
+    row = df.iloc[0].to_dict()
+    row["authors"] = row["authors"].split(',') if row.get("authors") else []
+    row["keywords"] = row["keywords"].split(',') if row.get("keywords") else []
+
+    return create_publication_card(row)
     
 # security-enhanced database function
 def get_university_keyword_scores(university_name, top_n):
@@ -501,10 +619,10 @@ def get_university_keyword_scores(university_name, top_n):
     WHERE u.name LIKE %s
     GROUP BY k.name
     ORDER BY total_score DESC
-    LIMIT %s;
     """
-    
-    return execute_query(query, (f"%{university_name.strip()}%", top_n))
+    all_keywords = execute_query(query, (university_name,))
+    total_keywords = len(all_keywords)
+    return all_keywords.head(top_n), total_keywords
 
 # accessibility-enhanced visualization
 def create_keyword_pie(df, university_name):
@@ -534,7 +652,6 @@ def create_keyword_pie(df, university_name):
             "<b>%{label}</b><br>"
             "Total Score: %{value}<br>"
             "Professors: %{customdata[0]}<br>"
-            "Contributors: %{customdata[1]}<br>"
             "<extra></extra>"
         ),
         marker=dict(line=dict(color='#ffffff', width=1))
@@ -566,44 +683,42 @@ def create_keyword_pie(df, university_name):
     [Input('university-tab-input', 'value'),
      Input('university-tab-top-n', 'value')]
 )
-
 def update_university_tab(name_input, top_n=10):
-    # Input validation
     if not name_input or len(name_input.strip()) < 3:
         raise PreventUpdate
-    
+
     try:
         top_n = int(top_n)
-        top_n = max(1, min(top_n, 50))  # Enforce 1-50 range
+        top_n = max(1, min(top_n, 50))
     except (TypeError, ValueError):
         top_n = 10
 
     clean_name = name_input.strip().title()
-    df = get_university_keyword_scores(clean_name, top_n)
+    df, total_keywords = get_university_keyword_scores(clean_name, top_n)
 
     if df.empty:
         return (
-            px.pie(title=f"No Data Found").update_layout(
+            px.pie(title="No Data Found").update_layout(
                 annotations=[dict(text=f"No results for '{clean_name}'", showarrow=False)]
             ),
             html.Div(
                 "Please verify the university name",
                 className='error-message',
                 style={'color': '#dc3545'}
-            )
+            ),
+            None,
+            {'display': 'none'}
         )
-    # Extract photo URL from first result
+
     photo_url = df.iloc[0]['photo_url'] if 'photo_url' in df.columns else None
-    # Generate visualization
     pie_fig = create_keyword_pie(df, clean_name)
-    
-    # Create sanitized stats panel
+
     stats_content = html.Div([
         html.H4(f"{clean_name} Research Summary", className='summary-title'),
         html.Div([
             html.Div([
-                html.Span("Total Keywords Analyzed:", className='stat-label'),
-                html.Span(f"{len(df)}", className='stat-value')
+                html.Span("Total Keywords Available:", className='stat-label'),
+                html.Span(f"{total_keywords}", className='stat-value')
             ], className='stat-item'),
             html.Div([
                 html.Span("Average Score:", className='stat-label'),
@@ -615,10 +730,9 @@ def update_university_tab(name_input, top_n=10):
             ], className='stat-item')
         ], className='stats-grid')
     ])
-    
-    # Show/hide photo based on availability
+
     photo_style = {'height': '200px', 'objectFit': 'cover'} if photo_url else {'display': 'none'}
-    
+
     return pie_fig, stats_content, photo_url, photo_style
     
 def find_similar_keywords(keyword: str, min_connections: int = 3) -> list:
@@ -1041,16 +1155,16 @@ def keyword_match(btn_clicks, faculty_clicks, keyword_input, limit):
             html.A(
                 row['name'],
                 href="#",
-                id={'type': 'kwmatch-faculty-name', 'index': row['name']},
+                id={'type': 'kwmatch-faculty-name', 'index': row['id']},
                 n_clicks=0,
                 style={'fontWeight': 'bold'}
             ),
-            html.Span(f" — {row['position']} at {row['university']} — Score: {row['total_score']:.2f} — Matched: {row['matched_keywords']} keyword(s)")
+            html.Span(f" — {row['position']} at {row['university']} — Score: {row['total_score']}")
         ]) for _, row in faculty_df.iterrows()
     ] if not faculty_df.empty else [html.Div("No matching faculty found.")]
 
     pub_list = [
-        html.Div(f"{row['title']} ({row['venue']}, {row['year']}) — Score: {row['total_score']:.2f}, Keywords: {row['matched_keywords']}")
+        html.Div(f"{row['title']} ({row['venue']}, {row['year']}) — Score: {row['total_score']}")
         for _, row in pub_df.iterrows()
     ] if not pub_df.empty else [html.Div("No matching publications found.")]
 
