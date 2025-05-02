@@ -2,13 +2,17 @@
 import dash
 from dash import dcc, html, Input, Output, State
 from dash.exceptions import PreventUpdate
+from datetime import datetime
+from bson import ObjectId
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import networkx as nx
+import json
 from neo4j import GraphDatabase
 from mysql_utils import MySQLUtils
+from mongodb_utils import MongoDBUtils
 from neo4j_utils import Neo4jUtils
 
 app = dash.Dash(__name__)
@@ -21,6 +25,8 @@ DB_CONFIG = {
     'password': 'password',
     'db': 'academicworld'
 }
+
+MONGO_URI = "mongodb://localhost:27017"
 
 NEO4J_CONFIG = {
      'database': 'academicworld',
@@ -178,7 +184,56 @@ app.layout = html.Div([
 		className='network-graph'
 	    )
 	], className='similarity-widget')
+    ]),
+    dcc.Tab(label='Admin Editor', children=[
+    html.Div([
+        html.H3("Data Override & Approval Panel"),
+
+        dcc.Dropdown(
+            id='admin-entity-type',
+            options=[
+                {'label': 'Faculty', 'value': 'faculty'},
+                {'label': 'Publication', 'value': 'publication'},
+                {'label': 'University', 'value': 'university'}
+            ],
+            placeholder="Select entity type"
+        ),
+
+        dcc.Input(id='admin-entity-id', type='number', placeholder='Enter entity ID'),
+
+        dcc.Textarea(
+            id='admin-json-editor',
+            placeholder='Enter field-value JSON (e.g., {"email": "new@edu.edu"})',
+            style={'width': '100%', 'height': '200px'}
+        ),
+	html.H4("Current Values"),
+	html.Pre(id='admin-current-values', style={'background': '#f7f7f7', 'padding': '10px'}),
+        html.Button("Submit Override", id='admin-submit-btn'),
+        html.Button("Delete Override", id='admin-delete-btn'),
+        html.Button("Approve Override", id='admin-approve-btn'),
+        html.Div(id='admin-action-status', style={'marginTop': '10px'}),
+        html.Hr(),
+	html.H4("Override History"),
+	html.Div(id='admin-history-list'),
+        html.H4("Pending Approvals"),
+        html.Div(id='admin-pending-list')
     ])
+]),
+	dcc.Tab(label='Keyword Matcher', children=[
+	    html.Div([
+		html.H3("Keyword Relevance Matcher"),
+		dcc.Input(id='kw-match-input', type='text', placeholder='Enter comma-separated keywords...'),
+		dcc.Slider(id='kw-match-limit', min=5, max=50, value=10, step=5, marks={i: str(i) for i in range(5, 55, 5)}),
+		html.Button("Find Matches", id='kw-match-btn'),
+		html.Div(id='kw-match-status', style={'marginTop': '10px'}),
+		html.H4("Top Professors"),
+		html.Div(id='kw-match-faculty'),
+		html.H4("Top Publications"),
+		html.Div(id='kw-match-publications'),
+		html.Hr(),
+                html.Div(id='kw-match-faculty-card', className='details-panel')
+	    ])
+	])
     ])
 ], style={'fontFamily': 'Arial, sans-serif'})
 
@@ -247,12 +302,15 @@ def get_faculty_list(search_term, limit):
     return execute_query(query, (search_pattern, limit))
 
 def get_full_faculty_details(name):
-    """Retrieve complete details for selected faculty"""
+    """Retrieve complete faculty profile including contact info and research interest"""
     query = """
     SELECT 
         f.name,
         f.position,
         f.photo_url,
+        f.email,
+        f.phone,
+        f.research_interest,
         u.name AS university,
         MAX(fk.score) AS keyword_score,
         k.name AS target_keyword,
@@ -267,6 +325,7 @@ def get_full_faculty_details(name):
     GROUP BY f.id, u.name, k.name;
     """
     return execute_query(query, (name,)).iloc[0]
+
 
 # Modified Faculty Callbacks
 @app.callback(
@@ -345,6 +404,9 @@ def create_faculty_card(faculty_row):
                     html.H4(faculty_row['name'], className='card-title'),
                     html.P(f"{faculty_row['position']} @ {faculty_row['university']}", 
                           className='text-muted'),
+                    html.P(f"Email: {faculty_row.get('email', 'N/A')}"),
+                    html.P(f"Phone: {faculty_row.get('phone', 'N/A')}"),
+                    html.P(f"Research Interests: {faculty_row.get('research_interest', 'N/A')}"),
                     html.P(f"Keyword Score: {faculty_row['keyword_score']:.2f}"),
                     html.Hr()
                 ], width=9)
@@ -726,7 +788,273 @@ def update_keyword_network(selected_keyword, min_conn):
     } for kw in results]
     
     return create_network_graph(nodes, links, selected_keyword)
+    
+def process_admin_action(action: str, entity_type: str, entity_id: int, json_input: str = "") -> str:
+    mongo = MongoDBUtils(MONGO_URI)
+    if not mongo.connect():
+        return "MongoDB connection failed"
 
+    collection_map = {
+        "faculty": "faculty_overrides",
+        "publication": "publication_overrides",
+        "university": "university_overrides"
+    }
+
+    collection = collection_map.get(entity_type)
+    if not collection:
+        return "Invalid entity type selected."
+
+    try:
+        if action == "submit":
+            updates = json.loads(json_input)
+            mongo.upsert_override(collection, entity_id, updates)
+
+            # Log submission
+            mongo.db["audit_log"].insert_one({
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "action": "submit",
+                "timestamp": datetime.utcnow(),
+                "changes": updates
+            })
+
+            return f"Override submitted for {entity_type.title()} ID {entity_id}."
+
+        elif action == "delete":
+            mongo.delete_override(collection, entity_id)
+
+            mongo.db["audit_log"].insert_one({
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "action": "delete",
+                "timestamp": datetime.utcnow()
+            })
+
+            return f"Override deleted for {entity_type.title()} ID {entity_id}."
+
+        elif action == "approve":
+            mongo.approve_override(collection, entity_id)
+
+            # Log approval
+            mongo.db["audit_log"].insert_one({
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "action": "approve",
+                "timestamp": datetime.utcnow()
+            })
+
+            return f"Override approved for {entity_type.title()} ID {entity_id}."
+
+        else:
+            return "Unknown action."
+    except json.JSONDecodeError:
+        return "Invalid JSON input."
+    except Exception as e:
+        return f"Error: {str(e)}"
+        
+def sanitize_mongo_doc(doc):
+    return {
+        k: (str(v) if isinstance(v, ObjectId) else v)
+        for k, v in doc.items()
+    }
+
+def reset_all_mongo_admin_data():
+    mongo = MongoDBUtils(MONGO_URI)
+    if mongo.connect():
+        for collection in [
+            "audit_log",
+            "faculty_overrides",
+            "publication_overrides",
+            "university_overrides"
+        ]:
+            mongo.db[collection].delete_many({})
+        mongo.close()
+
+reset_all_mongo_admin_data()
+
+@app.callback(
+    [Output('admin-action-status', 'children'),
+     Output('admin-pending-list', 'children'),
+     Output('admin-history-list', 'children'),
+     Output('admin-current-values', 'children')],
+    [Input('admin-submit-btn', 'n_clicks'),
+     Input('admin-delete-btn', 'n_clicks'),
+     Input('admin-approve-btn', 'n_clicks')],
+    [State('admin-entity-type', 'value'),
+     State('admin-entity-id', 'value'),
+     State('admin-json-editor', 'value')]
+)
+def handle_admin_actions(submit_click, delete_click, approve_click, entity_type, entity_id, json_input):
+    triggered = dash.callback_context.triggered
+    if not triggered or not entity_type or entity_id is None:
+        raise PreventUpdate
+
+    trigger_id = triggered[0]['prop_id'].split('.')[0]
+    action = None
+    if trigger_id == 'admin-submit-btn':
+        action = "submit"
+    elif trigger_id == 'admin-delete-btn':
+        action = "delete"
+    elif trigger_id == 'admin-approve-btn':
+        action = "approve"
+    else:
+        raise PreventUpdate
+
+    # Execute override action
+    status = process_admin_action(action, entity_type, entity_id, json_input)
+
+    mongo = MongoDBUtils(MONGO_URI)
+    pending_list, history, current_json = [], [], "No override found."
+
+    if mongo.connect():
+        collection = f"{entity_type}_overrides"
+
+        # Pending overrides
+        pending = mongo.get_pending_overrides(collection)
+        pending_list = [
+            html.Li(f"{entity_type.title()} ID {item['entity_id']}: {item}")
+            for item in pending
+        ]
+
+        # Current override preview
+	# Lookup original entity
+        original_doc = mongo.find(entity_type, {"id": entity_id})
+        override_doc = mongo.find(collection, {"entity_id": entity_id})
+
+	# Merge override (if any)
+        if original_doc:
+            merged = original_doc[0]
+            if override_doc:
+                for key, val in override_doc[0].items():
+                    if key not in ["_id", "entity_id", "approved"]:
+                        merged[key] = val
+                        sanitized = sanitize_mongo_doc(merged)
+            current_json = json.dumps(sanitized, indent=2)
+        else:
+            current_json = "Entity not found in MongoDB."
+
+
+        # History from audit log
+        audit = mongo.db["audit_log"].find(
+            {"entity_type": entity_type, "entity_id": entity_id}
+        ).sort("timestamp", -1).limit(5)
+        history = [
+            html.Li(f"{doc['timestamp']} - {doc['action'].title()}: {doc.get('changes', {})}")
+            for doc in audit
+        ]
+
+    return status, html.Ul(pending_list), html.Ul(history), current_json
+    
+def get_top_faculty_and_publications_by_keywords(keywords: list[str], top_n: int = 10):
+    faculty_query = """
+    SELECT 
+        f.id,
+        f.name,
+        f.position,
+        u.name AS university,
+        SUM(fk.score) AS total_score,
+        COUNT(DISTINCT k.name) AS matched_keywords
+    FROM faculty f
+    JOIN faculty_keyword fk ON f.id = fk.faculty_id
+    JOIN keyword k ON fk.keyword_id = k.id
+    JOIN university u ON f.university_id = u.id
+    WHERE k.name IN %(keywords)s
+    GROUP BY f.id, u.name
+    ORDER BY total_score DESC
+    LIMIT %(limit)s;
+    """
+
+    pub_query = """
+    SELECT 
+        p.id,
+        p.title,
+        p.venue,
+        p.year,
+        SUM(pk.score) AS total_score,
+        COUNT(DISTINCT k.name) AS matched_keywords
+    FROM publication p
+    JOIN Publication_Keyword pk ON p.id = pk.publication_id
+    JOIN keyword k ON pk.keyword_id = k.id
+    WHERE k.name IN %(keywords)s
+    GROUP BY p.id
+    ORDER BY total_score DESC
+    LIMIT %(limit)s;
+    """
+
+    params = {"keywords": tuple(keywords), "limit": top_n}
+    top_faculty = execute_query(faculty_query, params)
+    top_pubs = execute_query(pub_query, params)
+
+    return top_faculty, top_pubs
+    
+def display_clicked_faculty_from_match(clicks):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    faculty_name = eval(triggered_id)['index']
+    
+    try:
+        details = get_full_faculty_details(faculty_name)
+        return create_faculty_card(details)
+    except Exception as e:
+        return html.Div("Error loading faculty details.")
+
+@app.callback(
+    [Output('kw-match-status', 'children'),
+     Output('kw-match-faculty', 'children'),
+     Output('kw-match-publications', 'children'),
+     Output('kw-match-faculty-card', 'children')],
+    [Input('kw-match-btn', 'n_clicks'),
+     Input({'type': 'kwmatch-faculty-name', 'index': dash.dependencies.ALL}, 'n_clicks')],
+    [State('kw-match-input', 'value'),
+     State('kw-match-limit', 'value')]
+)
+def keyword_match(btn_clicks, faculty_clicks, keyword_input, limit):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    # Check if the trigger came from a clicked faculty name
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    if "kwmatch-faculty-name" in triggered_id:
+        faculty_name = eval(triggered_id)['index']
+        try:
+            details = get_full_faculty_details(faculty_name)
+            return dash.no_update, dash.no_update, dash.no_update, create_faculty_card(details)
+        except Exception:
+            return dash.no_update, dash.no_update, dash.no_update, html.Div("Error loading faculty details.")
+
+    # Otherwise, it's a keyword search
+    if not keyword_input:
+        return "Enter keywords to begin search.", "", "", ""
+
+    keywords = [kw.strip().lower() for kw in keyword_input.split(',') if kw.strip()]
+    if len(keywords) < 2:
+        return "Enter at least two keywords.", "", "", ""
+
+    faculty_df, pub_df = get_top_faculty_and_publications_by_keywords(keywords, limit)
+
+    faculty_list = [
+        html.Div([
+            html.A(
+                row['name'],
+                href="#",
+                id={'type': 'kwmatch-faculty-name', 'index': row['name']},
+                n_clicks=0,
+                style={'fontWeight': 'bold'}
+            ),
+            html.Span(f" — {row['position']} at {row['university']} — Score: {row['total_score']:.2f} — Matched: {row['matched_keywords']} keyword(s)")
+        ]) for _, row in faculty_df.iterrows()
+    ] if not faculty_df.empty else [html.Div("No matching faculty found.")]
+
+    pub_list = [
+        html.Div(f"{row['title']} ({row['venue']}, {row['year']}) — Score: {row['total_score']:.2f}, Keywords: {row['matched_keywords']}")
+        for _, row in pub_df.iterrows()
+    ] if not pub_df.empty else [html.Div("No matching publications found.")]
+
+    return f"Results for: {', '.join(keywords)}", faculty_list, pub_list, ""
 
 if __name__ == '__main__':
     app.run(debug=True, dev_tools_hot_reload=False, port=8050)
