@@ -1,4 +1,3 @@
-
 # app.py - Academic Research Analytics Dashboard (Modified Faculty Explorer)
 import dash
 from dash import dcc, html, Input, Output, State
@@ -239,7 +238,7 @@ html.Div([
             id='admin-entity-type',
             options=[
                 {'label': 'Faculty', 'value': 'faculty'},
-                {'label': 'Publication', 'value': 'publication'}
+                {'label': 'Publication', 'value': 'publications'}
             ],
             placeholder="Select entity type"
         ),
@@ -1044,8 +1043,7 @@ def update_keyword_and_match(selected_keyword, min_conn, filter_type, dropdown_v
 def process_admin_action(action: str, entity_type: str, entity_name: str, json_input: str = "") -> str:
     collection_map = {
         "faculty": "faculty_overrides",
-        "publication": "publication_overrides",
-        "university": "university_overrides"
+        "publications": "publications_overrides",
     }
 
     collection = collection_map.get(entity_type)
@@ -1112,8 +1110,7 @@ def reset_all_mongo_admin_data():
         for collection in [
             "audit_log",
             "faculty_overrides",
-            "publication_overrides",
-            "university_overrides"
+            "publications_overrides",
         ]:
             mongo.db[collection].delete_many({})
         mongo.close()
@@ -1207,10 +1204,10 @@ def update_keyword_score(n_clicks, entity_type, entity_name, keyword_name, new_s
 
     entity_type = entity_type.lower().strip()
     if entity_type not in ['faculty', 'publication']:
-        return "Invalid entity type. Use 'faculty' or 'publication'."
+        return "Invalid entity type. Use 'faculty' or 'publications'."
 
     # Look up entity ID
-    entity_table = 'faculty' if entity_type == 'faculty' else 'publication'
+    entity_table = 'faculty' if entity_type == 'faculty' else 'publications'
     entity_id_result = execute_query(
         f"SELECT id FROM {entity_table} WHERE name = %(name)s",
         {'name': entity_name}
