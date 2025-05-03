@@ -5,6 +5,7 @@ from dash.exceptions import PreventUpdate
 from datetime import datetime
 from bson import ObjectId
 from collections import Counter
+from pymongo import MongoClient
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
@@ -29,6 +30,8 @@ DB_CONFIG = {
 }
 
 MONGO_URI = "mongodb://localhost:27017"
+mongo = MongoDBUtils(MONGO_URI)
+mongo.connect()
 
 NEO4J_CONFIG = {
      'database': 'academicworld',
@@ -324,60 +327,48 @@ def get_faculty_list(search_term, limit):
     search_pattern = f"%{search_term}%"
     return execute_query(query, (search_pattern, limit))
 
-def get_full_faculty_details(name):
-    """Retrieve full faculty profile with top keywords by score"""
-    profile_query = """
-    SELECT
-        f.id, 
-        f.name,
-        f.position,
-        f.photo_url,
-        f.email,
-        f.phone,
-        f.research_interest,
-        u.name AS university,
-        MAX(fk.score) AS keyword_score,
-        k.name AS target_keyword,
-        GROUP_CONCAT(DISTINCT k_all.name) AS related_keywords
-    FROM faculty f
-    JOIN faculty_keyword fk ON f.id = fk.faculty_id
-    JOIN keyword k ON fk.keyword_id = k.id
-    JOIN university u ON f.university_id = u.id
-    LEFT JOIN faculty_keyword fk_all ON f.id = fk_all.faculty_id
-    LEFT JOIN keyword k_all ON fk_all.keyword_id = k_all.id
-    WHERE f.id = %s
-    GROUP BY f.id, u.name, k.name;
+def get_full_faculty_details(faculty_id: int) -> dict[str, any]:
+    """Retrieve full faculty profile with top keywords and recent publications using MongoDB."""
 
-    """
-
-    keywords_query = """
-    SELECT k.name, fk.score
-    FROM faculty_keyword fk
-    JOIN keyword k ON fk.keyword_id = k.id
-    WHERE fk.faculty_id = %s
-    ORDER BY fk.score DESC
-    LIMIT 10;
-    """
-
-    publications_query = """
-    SELECT p.title, p.venue, p.year, p.num_citations
-    FROM faculty_publication fp
-    JOIN publication p ON fp.publication_id = p.id
-    WHERE fp.faculty_id = %s
-    ORDER BY p.year DESC
-    LIMIT 5;
-    """
-
-    profile_df = execute_query(profile_query, (name,))
-    keywords_df = execute_query(keywords_query, (name,))
-    pubs_df = execute_query(publications_query, (name,))
-
-    if profile_df.empty:
+    faculty_result = mongo.find("faculty", {"id": faculty_id})
+    if not faculty_result:
         raise ValueError("Faculty not found.")
 
-    profile = profile_df.iloc[0].to_dict()
-    profile['top_keywords'] = keywords_df.to_dict('records') if not keywords_df.empty else []
-    profile["matched_publications"] = pubs_df.to_dict('records') if pubs_df is not None and not pubs_df.empty else []
+    faculty = faculty_result[0]
+
+    # Extract and sort top keywords by score
+    keywords = sorted(
+        faculty.get("keywords", []),
+        key=lambda k: k.get("score", 0),
+        reverse=True
+    )[:10]
+
+    # Retrieve publications by matching publication IDs
+    profile = {
+        "id": faculty.get("id"),
+        "name": faculty.get("name"),
+        "position": faculty.get("position"),
+        "photo_url": faculty.get("photoUrl"),
+        "email": faculty.get("email"),
+        "phone": faculty.get("phone"),
+        "research_interest": faculty.get("researchInterest"),
+        "university": faculty.get("affiliation", {}).get("name", "Unknown"),
+        "top_keywords": [{"name": k["name"], "score": k["score"]} for k in keywords],
+    }
+    # Get top 5 publication details by publication IDs
+    publication_ids = faculty.get("publications", [])[:5]  # Limit to 5 recent ones
+    publications = mongo.find(
+        "publications",
+        {"id": {"$in": publication_ids}},
+        projection={"_id": 0}
+    )
+# Make sure the result is a list and sort by year
+    if publications:
+        sorted_pubs = sorted(publications, key=lambda x: x.get("year", 0), reverse=True)
+        profile["matched_publications"] = sorted_pubs
+    else:
+        profile["matched_publications"] = []
+
     return profile
 
 # Modified Faculty Callbacks
@@ -432,7 +423,6 @@ def show_faculty_details(clicks, cached_data):
     ctx = dash.callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
     selected_name = eval(triggered_id)['index']
-    
     try:
         full_details = get_full_faculty_details(selected_name)
         return create_faculty_card(full_details)
@@ -441,48 +431,44 @@ def show_faculty_details(clicks, cached_data):
         return html.Div("Error loading faculty details", className='error-message')
 
 def create_faculty_card(faculty_row):
-    """Generate detailed faculty profile card with contact info, keywords, and relevant publications"""
-    keyword_items = [html.Li(f"{kw['name']} — Score: {kw['score']:.2f}")
-                     for kw in faculty_row.get('top_keywords', [])]
+    keyword_items = [
+        html.Li(f"{kw['name']} — Score: {kw['score']:.2f}")
+        for kw in faculty_row.get('top_keywords', [])
+    ]
 
     publication_items = [
-        html.Li(f"{pub['title']} ({pub['venue']}, {pub['year']}) — Citations: {pub['num_citations']}")
+        html.Li(f"{pub['title']} ({pub['venue']}, {pub['year']}) — Citations: {pub['numCitations']}")
         for pub in faculty_row.get("matched_publications", [])
     ]
 
-    return dbc.Card(
-        [
-            dbc.Row([
-                dbc.Col(
-                    html.Img(
-                        src=faculty_row['photo_url'],
-                        className='faculty-photo',
-                        style={'height':'150px', 'objectFit':'cover'}
-                    ), 
-                    width=3
+    return dbc.Card([
+        dbc.Row([
+            dbc.Col(
+                html.Img(
+                    src=faculty_row.get('photo_url', ''),
+                    className='faculty-photo',
+                    style={'height': '150px', 'objectFit': 'cover'}
                 ),
-                dbc.Col([
-                    html.H4(faculty_row['name'], className='card-title'),
-                    html.P(f"{faculty_row['position']} @ {faculty_row['university']}", 
-                          className='text-muted'),
-                    html.P(f"Email: {faculty_row.get('email', 'N/A')}"),
-                    html.P(f"Phone: {faculty_row.get('phone', 'N/A')}"),
-                    html.P(f"Research Interests: {faculty_row.get('research_interest', 'N/A')}"),
-                    html.H5("Top Keywords"),
-                    html.Ul(keyword_items),
-                    html.H5("Publications"),
-                    html.Ul(publication_items if publication_items else [html.Li("None found")]),
-                    html.Hr()
-                ], width=9)
-            ])
-        ],
-        className='mb-3 shadow-sm'
-    )
+                width=3
+            ),
+            dbc.Col([
+                html.H4(faculty_row.get('name', 'N/A'), className='card-title'),
+                html.P(f"{faculty_row.get('position', '')} @ {faculty_row.get('university', 'Unknown')}",
+                       className='text-muted'),
+                html.P(f"Email: {faculty_row.get('email', 'N/A')}"),
+                html.P(f"Phone: {faculty_row.get('phone', 'N/A')}"),
+                html.P(f"Research Interests: {faculty_row.get('research_interest', 'N/A')}"),
+                html.H5("Top Keywords"),
+                html.Ul(keyword_items),
+                html.H5("Publications"),
+                html.Ul(publication_items if publication_items else [html.Li("None found")]),
+                html.Hr()
+            ], width=9)
+        ])
+    ], className='mb-3 shadow-sm')
 
 def create_publication_card(pub_row):
-    """Generate a card with publication metadata and author/keyword details."""
-    raw_authors = pub_row.get("authors", [])
-    cleaned_authors = [clean_author_name(a) for a in raw_authors if a and clean_author_name(a).lower() not in ['ph.d.', 'phd', 'dr.', 'dr']]
+    cleaned_authors = [clean_author_name(a) for a in pub_row.get("authors", []) if a]
     authors = html.Ul([html.Li(a) for a in cleaned_authors]) if cleaned_authors else html.P("No authors listed.")
 
     keywords = html.Ul([html.Li(k) for k in pub_row.get("keywords", [])])
@@ -492,7 +478,7 @@ def create_publication_card(pub_row):
             html.H4(pub_row["title"], className="card-title"),
             html.P(f"Venue: {pub_row['venue']}"),
             html.P(f"Year: {pub_row['year']}"),
-            html.P(f"Citations: {pub_row['num_citations']}"),
+            html.P(f"Citations: {pub_row.get('num_citations', 0)}"),
             html.H5("Authors"),
             authors,
             html.H5("Keywords"),
@@ -599,28 +585,20 @@ def display_publication_card(clickData):
         raise PreventUpdate
 
     title = clickData['points'][0]['hovertext']
-    query = """
-    SELECT 
-        p.title, p.venue, p.year, p.num_citations,
-        GROUP_CONCAT(DISTINCT f.name) AS authors,
-        GROUP_CONCAT(DISTINCT k.name) AS keywords
-    FROM publication p
-    LEFT JOIN faculty_publication fp ON p.id = fp.publication_id
-    LEFT JOIN faculty f ON fp.faculty_id = f.id
-    LEFT JOIN Publication_Keyword pk ON p.id = pk.publication_id
-    LEFT JOIN keyword k ON pk.keyword_id = k.id
-    WHERE p.title = %s
-    GROUP BY p.id;
-    """
-    df = execute_query(query, (title,))
-    if df.empty:
+    results = mongo.find("publication", {"title": title})
+    if not results:
         return html.Div("No details available.")
 
-    row = df.iloc[0].to_dict()
-    row["authors"] = row["authors"].split(',') if row.get("authors") else []
-    row["keywords"] = row["keywords"].split(',') if row.get("keywords") else []
+    pub = results[0]
+    
+    # Retrieve author names from faculty documents
+    faculty_docs = mongo.find("faculty", {"publications": pub.get("id", -1)})
+    authors = [f.get("name") for f in faculty_docs if f.get("name")]
 
-    return create_publication_card(row)
+    pub["authors"] = authors
+    pub["keywords"] = [k["name"] for k in pub.get("keywords", [])]
+
+    return create_publication_card(pub)
     
 # security-enhanced database function
 def get_university_keyword_scores(university_name, top_n):
@@ -933,10 +911,6 @@ def update_keyword_network(selected_keyword, min_conn, filter_type):
     return create_network_graph(nodes, links, selected_keyword)
     
 def process_admin_action(action: str, entity_type: str, entity_id: int, json_input: str = "") -> str:
-    mongo = MongoDBUtils(MONGO_URI)
-    if not mongo.connect():
-        return "MongoDB connection failed"
-
     collection_map = {
         "faculty": "faculty_overrides",
         "publication": "publication_overrides",
@@ -1137,7 +1111,6 @@ def display_clicked_faculty_from_match(clicks):
 
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
     faculty_name = eval(triggered_id)['index']
-    
     try:
         details = get_full_faculty_details(faculty_name)
         return create_faculty_card(details)
