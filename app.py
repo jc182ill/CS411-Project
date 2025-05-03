@@ -224,7 +224,7 @@ app.layout = html.Div([
             placeholder="Select entity type"
         ),
 
-        dcc.Input(id='admin-entity-id', type='number', placeholder='Enter entity ID'),
+        dcc.Input(id='admin-entity-name', type='text', placeholder='Enter entity name'),
 
         dcc.Textarea(
             id='admin-json-editor',
@@ -331,10 +331,17 @@ def get_full_faculty_details(faculty_id: int) -> dict[str, any]:
     """Retrieve full faculty profile with top keywords and recent publications using MongoDB."""
 
     faculty_result = mongo.find("faculty", {"id": faculty_id})
+    
     if not faculty_result:
         raise ValueError("Faculty not found.")
-
+    
     faculty = faculty_result[0]
+    name = faculty.get("name")
+    override_doc = mongo.find("faculty_overrides", {"entity_str": name, "approved": True})
+    if override_doc:
+        for k, v in override_doc[0].items():
+            if k not in ["_id", "entity_id", "approved"]:
+                faculty[k] = v
 
     # Extract and sort top keywords by score
     keywords = sorted(
@@ -910,7 +917,7 @@ def update_keyword_network(selected_keyword, min_conn, filter_type):
     
     return create_network_graph(nodes, links, selected_keyword)
     
-def process_admin_action(action: str, entity_type: str, entity_id: int, json_input: str = "") -> str:
+def process_admin_action(action: str, entity_type: str, entity_name: str, json_input: str = "") -> str:
     collection_map = {
         "faculty": "faculty_overrides",
         "publication": "publication_overrides",
@@ -924,43 +931,43 @@ def process_admin_action(action: str, entity_type: str, entity_id: int, json_inp
     try:
         if action == "submit":
             updates = json.loads(json_input)
-            mongo.upsert_override(collection, entity_id, updates)
+            mongo.upsert_override(collection, entity_name, updates)
 
             # Log submission
             mongo.db["audit_log"].insert_one({
                 "entity_type": entity_type,
-                "entity_id": entity_id,
+                "entity_name": entity_name,
                 "action": "submit",
                 "timestamp": datetime.utcnow(),
                 "changes": updates
             })
 
-            return f"Override submitted for {entity_type.title()} ID {entity_id}."
+            return f"Override submitted for {entity_type.title()} Name {entity_name}."
 
         elif action == "delete":
-            mongo.delete_override(collection, entity_id)
+            mongo.delete_override(collection, entity_name)
 
             mongo.db["audit_log"].insert_one({
                 "entity_type": entity_type,
-                "entity_id": entity_id,
+                "entity_name": entity_name,
                 "action": "delete",
                 "timestamp": datetime.utcnow()
             })
 
-            return f"Override deleted for {entity_type.title()} ID {entity_id}."
+            return f"Override deleted for {entity_type.title()} Name {entity_name}."
 
         elif action == "approve":
-            mongo.approve_override(collection, entity_id)
+            mongo.approve_override(collection, entity_name)
 
             # Log approval
             mongo.db["audit_log"].insert_one({
                 "entity_type": entity_type,
-                "entity_id": entity_id,
+                "entity_name": entity_name,
                 "action": "approve",
                 "timestamp": datetime.utcnow()
             })
 
-            return f"Override approved for {entity_type.title()} ID {entity_id}."
+            return f"Override approved for {entity_type.title()} Name {entity_name}."
 
         else:
             return "Unknown action."
@@ -998,12 +1005,12 @@ reset_all_mongo_admin_data()
      Input('admin-delete-btn', 'n_clicks'),
      Input('admin-approve-btn', 'n_clicks')],
     [State('admin-entity-type', 'value'),
-     State('admin-entity-id', 'value'),
+     State('admin-entity-name', 'value'),
      State('admin-json-editor', 'value')]
 )
-def handle_admin_actions(submit_click, delete_click, approve_click, entity_type, entity_id, json_input):
+def handle_admin_actions(submit_click, delete_click, approve_click, entity_type, entity_name, json_input):
     triggered = dash.callback_context.triggered
-    if not triggered or not entity_type or entity_id is None:
+    if not triggered or not entity_type or entity_name is None:
         raise PreventUpdate
 
     trigger_id = triggered[0]['prop_id'].split('.')[0]
@@ -1018,7 +1025,7 @@ def handle_admin_actions(submit_click, delete_click, approve_click, entity_type,
         raise PreventUpdate
 
     # Execute override action
-    status = process_admin_action(action, entity_type, entity_id, json_input)
+    status = process_admin_action(action, entity_type, entity_name, json_input)
 
     mongo = MongoDBUtils(MONGO_URI)
     pending_list, history, current_json = [], [], "No override found."
@@ -1029,23 +1036,23 @@ def handle_admin_actions(submit_click, delete_click, approve_click, entity_type,
         # Pending overrides
         pending = mongo.get_pending_overrides(collection)
         pending_list = [
-            html.Li(f"{entity_type.title()} ID {item['entity_id']}: {item}")
+            html.Li(f"{entity_type.title()} ID {item['entity_str']}: {item}")
             for item in pending
         ]
 
         # Current override preview
 	# Lookup original entity
-        original_doc = mongo.find(entity_type, {"id": entity_id})
-        override_doc = mongo.find(collection, {"entity_id": entity_id})
+        original_doc = mongo.find(entity_type, {"name": entity_name})
+        override_doc = mongo.find(collection, {"entity_name": entity_name})
 
 	# Merge override (if any)
         if original_doc:
             merged = original_doc[0]
             if override_doc:
                 for key, val in override_doc[0].items():
-                    if key not in ["_id", "entity_id", "approved"]:
+                    if key not in ["_id", "entity_name", "approved"]:
                         merged[key] = val
-                        sanitized = sanitize_mongo_doc(merged)
+            sanitized = sanitize_mongo_doc(merged)
             current_json = json.dumps(sanitized, indent=2)
         else:
             current_json = "Entity not found in MongoDB."
@@ -1053,7 +1060,7 @@ def handle_admin_actions(submit_click, delete_click, approve_click, entity_type,
 
         # History from audit log
         audit = mongo.db["audit_log"].find(
-            {"entity_type": entity_type, "entity_id": entity_id}
+            {"entity_type": entity_type, "entity_name": entity_name}
         ).sort("timestamp", -1).limit(5)
         history = [
             html.Li(f"{doc['timestamp']} - {doc['action'].title()}: {doc.get('changes', {})}")
