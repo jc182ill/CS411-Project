@@ -500,7 +500,7 @@ def create_publication_card(pub_row):
             html.H4(pub_row["title"], className="card-title"),
             html.P(f"Venue: {pub_row['venue']}"),
             html.P(f"Year: {pub_row['year']}"),
-            html.P(f"Citations: {pub_row.get('num_citations', 0)}"),
+            html.P(f"Citations: {pub_row.get('numCitations', 0)}"),
             html.H5("Authors"),
             authors,
             html.H5("Keywords"),
@@ -608,6 +608,13 @@ def display_publication_card(clickData):
         return html.Div("No details available.")
 
     pub = results[0]
+    name = pub.get("title")
+    override_doc = mongo.find("publications_overrides", {"entity_str": name, "approved": True})
+    if override_doc:
+        print("check")
+        for k, v in override_doc[0].items():
+            if k not in ["_id", "entity_id", "approved"]:
+                pub[k] = v
     
     # Retrieve author names from faculty documents
     faculty_docs = mongo.find("faculty", {"publications": pub.get("id", -1)})
@@ -1163,7 +1170,10 @@ def handle_admin_actions(submit_click, delete_click, approve_click, entity_type,
 
         # Current override preview
 	# Lookup original entity
-        original_doc = mongo.find(entity_type, {"name": entity_name})
+        if entity_type == 'faculty':
+            original_doc = mongo.find(entity_type, {"name": entity_name})
+        else:
+            original_doc = mongo.find(entity_type, {"title": entity_name})
         override_doc = mongo.find(collection, {"entity_name": entity_name})
 
 	# Merge override (if any)
@@ -1207,7 +1217,7 @@ def update_keyword_score(n_clicks, entity_type, entity_name, keyword_name, new_s
         return "Invalid entity type. Use 'faculty' or 'publications'."
 
     # Look up entity ID
-    entity_table = 'faculty' if entity_type == 'faculty' else 'publications'
+    entity_table = 'faculty' if entity_type == 'faculty' else 'publication'
     entity_id_result = execute_query(
         f"SELECT id FROM {entity_table} WHERE name = %(name)s",
         {'name': entity_name}
