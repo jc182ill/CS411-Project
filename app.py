@@ -38,189 +38,202 @@ NEO4J_CONFIG = {
 }
 
 app.layout = html.Div([
-    html.H1("Academic Research Analytics Dashboard", className='main-header'),
-    
-    dcc.Tabs([
-        # Modified Faculty Explorer Tab
-        dcc.Tab(label='Faculty Explorer', children=[
-            html.Div([
-                html.Div([
-                    html.Label("Search Faculty Expertise:", className='control-label'),
-                    dcc.Input(
-                        id='faculty-keyword-input',
-                        type='text',
-                        placeholder='Enter keyword...',
-                        className='keyword-input'
-                    )
-                ], className='search-column'),
-                
-                html.Div([
-                    html.Label("Results Limit:", className='control-label'),
-                dcc.Input(
-                    id='faculty-count-input',
-                    type='number',
-                    value=10,
-                    min=1,
-                    max=1000,
-                    step=1,
-                    debounce=True,  
-                    style={'width': '100px'}
-                )
-                ], className='control-column')
-            ], className='control-panel'),
-            
-            # List and Details Container
-            html.Div([
-                html.Div(id='faculty-list-container', className='scrollable-list'),
-                html.Div(id='faculty-details-container', className='details-panel')
-            ], className='list-detail-container'),
-            
-            dcc.Store(id='faculty-cache-store')
-        ]),
-
-    #Publication Explorer Tab
-    dcc.Tab(label='Publication Explorer', children=[
+    html.H1("Academic Keywords Analytics Dashboard", className='main-header'),
+    html.Hr(),
+    dbc.Container([
+        # === Top Row ===
         html.Div([
-            html.Div([
-                html.Label("Keyword Search:", className='control-label'),
-                dcc.Input(
-                    id='publication-keyword-input',
-                    type='text',
-                    placeholder='Enter research keyword...',
-                    className='keyword-input'
-                )
-             ], className='search-column'),
-            html.Div([
-                html.Label("Publications to Show:", className='control-label'),
-                dcc.Input(
-                    id='pub-count-input',
-                    type='number',
-                    value=20,
-                    min=1,
-                    max=1000,
-                    step=1,
-                    debounce=True,  
-                    style={'width': '100px'}
-                )
-            ], className='control-column')
-        ], className='control-panel'),
+                	html.Div([
+            	html.H2("Faculty Explorer"),
+            	html.Div([
+                	html.Div([
+                    	html.Label("Search Faculty Expertise:", className='control-label'),
+                    	dcc.Input(
+                        	id='faculty-keyword-input',
+                        	type='text',
+                        	placeholder='Enter keyword...',
+                        	className='keyword-input'
+                    	)
+                	], className='search-column'),
 
-        dcc.Graph(id='publication-scores-chart'),
-        html.Div(id='publication-meta', className='stats-panel'),
-        html.Div(id='publication-detail-card', className='detail-panel')
-    ]),
-    # New University Analysis Tab
-    dcc.Tab(label='University Analysis', children=[
-        html.Div([
-            html.H3("University Research Strength Analyzer", className='tab-header'),
-            # Photo Card (new)
-            html.Div(
-                id='university-photo-card',
-                className='photo-card',
-                children=[
-                    html.Img(
-                        id='university-photo',
-                        className='university-photo',
-                        style={'display': 'none'}  # Hidden by default
-                    )
-                ]
-            ),
-	    # Control Panel
-            html.Div([
+                	html.Div([
+                    	html.Label("Results Limit:", className='control-label'),
+                    	dcc.Input(
+                        	id='faculty-count-input',
+                        	type='number',
+                        	value=10,
+                        	min=1,
+                        	max=1000,
+                        	step=1,
+                        	debounce=True,
+                        	style={'width': '100px'}
+                    	)
+                	], className='control-column')
+            	], className='control-panel'),
+
+            	html.Div([
+                	html.Div(id='faculty-list-container', className='scrollable-list'),
+                	html.Div(id='faculty-details-container', className='details-panel')
+            	], className='list-detail-container'),
+
+            	dcc.Store(id='faculty-cache-store'),
+        	],style={'width': '30%'}),
+
+        	html.Div([
+            	html.H2("Publication Explorer"),
+            	html.Div([
+                	html.Div([
+                    	html.Label("Keyword Search:", className='control-label'),
+                    	dcc.Input(
+                        	id='publication-keyword-input',
+                        	type='text',
+                        	placeholder='Enter research keyword...',
+                        	className='keyword-input'
+                    	)
+                	], className='search-column'),
+
+                	html.Div([
+                    	html.Label("Publications to Show:", className='control-label'),
+                    	dcc.Input(
+                        	id='pub-count-input',
+                        	type='number',
+                        	value=20,
+                        	min=1,
+                        	max=1000,
+                        	step=1,
+                        	debounce=True,
+                        	style={'width': '100px'}
+                    	)
+                	], className='control-column')
+            	], className='control-panel'),
+
+            	dcc.Graph(id='publication-scores-chart'),
+            	html.Div(id='publication-meta', className='stats-panel'),
+            	html.Div(id='publication-detail-card', className='detail-panel')
+        	],style={'width': '30%'}),
+        	html.Div([
+            	html.H2("University Analysis"),
+            	html.Div([
+                	html.Div(
+                    	id='university-photo-card',
+                    	className='photo-card',
+                    	children=[
+                        	html.Img(
+                            	id='university-photo',
+                            	className='university-photo',
+                            	style={'display': 'none'}
+                        	)
+                    	]
+                	),
+                	html.Div([
+                    	html.Div([
+                        	html.Label("University Name:", className='control-label'),
+                        	dcc.Input(
+                            	id='university-tab-input',
+                            	type='text',
+                            	placeholder='Start typing university name...',
+                            	className='university-input',
+                            	debounce=True
+                        	)
+                    	], className='search-column'),
+
+                    	html.Div([
+                        	html.Label("Top Keywords to Display (up to 20):", className='control-label'),
+                        	dcc.Input(
+                            	id='university-tab-top-n',
+                            	type='number',
+                            	value=10,
+                            	min=1,
+                            	max=20,
+                            	step=1,
+                            	debounce=True,
+                            	style={'width': '100px'}
+                        	)
+                    	], className='control-column')
+                	], className='control-panel'),
+
+                	dbc.Row([
+                    	dbc.Col(
+                        	dcc.Graph(id='university-tab-pie-chart', config={'displayModeBar': False}, className='pie-container'),
+                        	style={'height': '500px'}
+                    	),
+                    	dbc.Col(
+                        	html.Div(id='university-keyword-list', style={'overflowY': 'auto', 'maxHeight': '500px'}),
+                        	width=6
+                    	)
+                	]),
+                	html.Div(id='university-stats-panel', className='stats-panel')
+            	], className='university-tab-content')
+        	], style={'width': '30%'})
+        ],style={
+    'display': 'flex',
+    'flexWrap': 'nowrap',
+    'justifyContent': 'space-between',
+    'alignItems': 'flex-start',
+    'marginBottom': '30px'
+        }
+        ),
+
+        html.Hr(),
+
+        # === Bottom Row ===
+        dbc.Row([
+            dbc.Col([
+                html.H2("Related Keyword Explorer"),
                 html.Div([
-                    html.Label("University Name:", className='control-label'),
                     dcc.Input(
-                        id='university-tab-input',
+                        id='keyword-input',
                         type='text',
-                        placeholder='Start typing university name...',
-                        className='university-input',
-                        debounce=True
-                    )
-                ], className='search-column'),
-                
-                html.Div([
-                    html.Label("Top Keywords to Display (up to 20):", className='control-label'),
-                    dcc.Input(
-                        id='university-tab-top-n',
-                        type='number',
-                        value=10,
-                        min=1,
-                        max=20,
-                        step=1,
-                        debounce=True,  
-                        style={'width': '100px'}
-                    )
-                ], className='control-column')
-            ], className='control-panel'),
-            
-            # Visualization Area
-            dbc.Row([
-                dbc.Col(
-                    dcc.Graph(id='university-tab-pie-chart', config={'displayModeBar': False}, className='pie-container'), style={'height': '500px'}),
-                dbc.Col(
-                html.Div(id='university-keyword-list', style={'overflowY': 'auto', 'maxHeight': '500px'}),
-                width=6
-               )
-           ]),            
-            # Supplemental Info
-            html.Div(id='university-stats-panel', className='stats-panel')
-        ], className='university-tab-content')
-    ]),
-    dcc.Tab(label='Related Keywords', children=[
-	html.Div([
-	    html.H4("Related Keyword Explorer", className='widget-header'),
-	    html.Div([
-		dcc.Input(
-		    id='keyword-input',
-		    type='text',
-		    placeholder='Enter research keyword...',
-		    debounce=True,  # Prevents rapid firing
-		    style={'width': '100%', 'padding': '10px'}
-		),
-		dcc.Dropdown(
-                    id='keyword-filter-type',
-                    options=[
-                        {'label': 'Both Faculty and Publications', 'value': 'both'},
-                        {'label': 'Faculty Only', 'value': 'faculty'},
-                        {'label': 'Publications Only', 'value': 'publication'}
-                    ],
-                    value='both',
-                    clearable=False,
-                    style={'width': '300px', 'marginTop': '10px'}
+                        placeholder='Enter research keyword...',
+                        debounce=True,
+                        style={'width': '100%', 'padding': '10px'}
+                    ),
+                    dcc.Dropdown(
+                        id='keyword-filter-type',
+                        options=[
+                            {'label': 'Both Faculty and Publications', 'value': 'both'},
+                            {'label': 'Faculty Only', 'value': 'faculty'},
+                            {'label': 'Publications Only', 'value': 'publication'}
+                        ],
+                        value='both',
+                        clearable=False,
+                        style={'width': '300px', 'marginTop': '10px'}
+                    ),
+                    html.Div([
+                        html.Label("Minimum Connections:", className='control-label'),
+                        dcc.Input(
+                            id='connection-threshold',
+                            type='number',
+                            value=2,
+                            min=1,
+                            max=1000,
+                            step=1,
+                            debounce=True,
+                            style={'width': '100px'}
+                        )
+                    ], className='threshold-control')
+                ], className='control-bar'),
+
+                dcc.Graph(
+                    id='keyword-network',
+                    style={'height': '400px', 'width': '100%'},
+                    config={'displayModeBar': False},
+                    className='network-graph'
                 ),
-		html.Div([
-		    html.Label("Minimum Connections:", className='control-label'),
-		    dcc.Input(
-                        id='connection-threshold',
-                        type='number',
-                        value=2,
-                        min=1,
-                        max=1000,
-                        step=1,
-                        debounce=True,  
-                        style={'width': '100px'}
-                    )
-		], className='threshold-control')
-	    ], className='control-bar'),
-	    dcc.Graph(
-		id='keyword-network',
-		style={'height': '900px', 'width': '100%'},
-		config={'displayModeBar': False},
-		className='network-graph'
-	    ),
-	    html.Div(id='kw-match-faculty-card'),
-	    html.Div(id='related-keyword-results'),
-            html.Br(),
-            html.H4("Select a Related Keyword"),
-	    dcc.Dropdown(id='related-keyword-dropdown', placeholder="Select from related keywords", multi = True), 
-	    html.Div(id = 'keyword-matching-results')
-	], 
-	className='similarity-widget')
-    ]),
-    dcc.Tab(label='Database Editor', children=[
+                html.Div(id='kw-match-faculty-card'),
+                html.Div(id='related-keyword-results'),
+                html.Br(),
+                html.H4("Select a Related Keyword"),
+                dcc.Dropdown(id='related-keyword-dropdown', placeholder="Select from related keywords", multi=True),
+                html.Div(id='keyword-matching-results')
+            ], width=4),
+            html.Hr(),
+
+# === Database Editor and Keyword Editor in one row ===
+html.H2("Database Editor & Keyword Editor"),
+html.Div([
     html.Div([
         html.H3("Data Override & Approval Panel"),
-
         dcc.Dropdown(
             id='admin-entity-type',
             options=[
@@ -229,38 +242,42 @@ app.layout = html.Div([
             ],
             placeholder="Select entity type"
         ),
-
         dcc.Input(id='admin-entity-name', type='text', placeholder='Enter entity name'),
-
         dcc.Textarea(
             id='admin-json-editor',
             placeholder='Enter field-value JSON (e.g., {"email": "new@edu.edu"})',
-            style={'width': '100%', 'height': '200px'}
+            style={'width': '100%', 'height': '50px'}
         ),
-	html.H4("Current Values"),
-	html.Pre(id='admin-current-values', style={'background': '#f7f7f7', 'padding': '10px'}),
+        html.H4("Current Values"),
+        html.Pre(id='admin-current-values', style={'background': '#f7f7f7', 'padding': '10px'}),
         html.Button("Submit Override", id='admin-submit-btn'),
         html.Button("Delete Override", id='admin-delete-btn'),
         html.Button("Approve Override", id='admin-approve-btn'),
         html.Div(id='admin-action-status', style={'marginTop': '10px'}),
         html.Hr(),
-	html.H4("Override History"),
-	html.Div(id='admin-history-list'),
+        html.H4("Override History"),
+        html.Div(id='admin-history-list'),
         html.H4("Pending Approvals"),
         html.Div(id='admin-pending-list')
-    ])
-]),
-     dcc.Tab(label='Keyword Editor', children=[
-     html.Div([
-         dcc.Input(id='entity-type-input', type='text', placeholder='Enter "faculty" or "publication"'),
-         dcc.Input(id='entity-name-input', type='text', placeholder='Enter professor or publication name'),
-         dcc.Input(id='keyword-name-input', type='text', placeholder='Enter keyword name'),
-         dcc.Input(id='new-score-input', type='number', placeholder='Enter new score'),
-         html.Button('Update Score', id='update-score-btn'),
-         html.Div(id='update-score-status')
-     ])
-    ])
-    ])
+    ], style={'width': '48%'}),
+    
+    html.Div(style={
+        'width': '1px',
+        'backgroundColor': '#ccc',
+        'margin': '0 10px'
+    }),
+    html.Div([
+        html.H3("Keyword Editor"),
+        dcc.Input(id='entity-type-input', type='text', placeholder='Enter "faculty" or "publication"'),
+        dcc.Input(id='entity-name-input', type='text', placeholder='Enter professor or publication name'),
+        dcc.Input(id='keyword-name-input', type='text', placeholder='Enter keyword name'),
+        dcc.Input(id='new-score-input', type='number', placeholder='Enter new score'),
+        html.Button('Update Score', id='update-score-btn'),
+        html.Div(id='update-score-status')
+    ], style={'width': '48%'})
+], style={'display': 'flex', 'flexWrap': 'wrap'}),
+        ])
+    ], fluid=True)
 ], style={'fontFamily': 'Arial, sans-serif'})
 
 # Shared Database function
@@ -307,25 +324,23 @@ def execute_query(query, params=None, db_type='mysql'):
 
 # Faculty Analysis Functions (modified)
 def get_faculty_list(search_term, limit):
-    """Retrieve simplified faculty list with basic info"""
+    """Retrieve simplified faculty list with basic info using a view"""
     query = """
     SELECT
-        f.id, 
-        f.name,
-        f.position,
-        u.name AS university,
-        MAX(fk.score) AS keyword_score
-    FROM faculty f
-    JOIN faculty_keyword fk ON f.id = fk.faculty_id
-    JOIN keyword k ON fk.keyword_id = k.id
-    JOIN university u ON f.university_id = u.id
-    WHERE k.name LIKE %s
-    GROUP BY f.id, u.name
+        faculty_id AS id,
+        faculty_name AS name,
+        position,
+        university_name as university,
+        MAX(score) AS keyword_score
+    FROM faculty_keyword_score_view
+    WHERE keyword LIKE %s
+    GROUP BY faculty_id, university_name
     ORDER BY keyword_score DESC
     LIMIT %s;
     """
     search_pattern = f"%{search_term}%"
     return execute_query(query, (search_pattern, limit))
+
 
 def get_full_faculty_details(faculty_id: int) -> dict[str, any]:
     """Retrieve full faculty profile with top keywords and recent publications using MongoDB."""
@@ -498,26 +513,21 @@ def create_publication_card(pub_row):
 def get_top_publications(keyword, top_n):
     """Retrieve publications with highest keyword relevance and extra metadata"""
     query = """
-    SELECT 
-        p.id,
-        p.title,
-        p.venue,
-        p.year,
-        p.num_citations,
-        MAX(pk.score) AS keyword_score,
-        GROUP_CONCAT(DISTINCT f.name) AS authors,
-        GROUP_CONCAT(DISTINCT k_all.name) AS keywords
-    FROM publication p
-    JOIN Publication_Keyword pk ON p.id = pk.publication_id
-    JOIN keyword k ON pk.keyword_id = k.id
-    LEFT JOIN Publication_Keyword pk_all ON p.id = pk_all.publication_id
-    LEFT JOIN keyword k_all ON pk_all.keyword_id = k_all.id
-    LEFT JOIN faculty_publication fp ON p.id = fp.publication_id
-    LEFT JOIN faculty f ON fp.faculty_id = f.id
-    WHERE k.name = %s
-    GROUP BY p.id
+    SELECT
+    publication_id,
+    title,
+    venue,
+    year,
+    num_citations,
+    MAX(score) AS keyword_score,
+    GROUP_CONCAT(DISTINCT faculty_name) AS authors,
+    GROUP_CONCAT(DISTINCT all_keyword) AS keywords
+    FROM publication_keyword_detail_view
+    WHERE keyword = %s
+    GROUP BY publication_id
     ORDER BY keyword_score DESC
     LIMIT %s;
+
     """
     return execute_query(query, (keyword, top_n))
 
@@ -592,7 +602,8 @@ def display_publication_card(clickData):
         raise PreventUpdate
 
     title = clickData['points'][0]['hovertext']
-    results = mongo.find("publication", {"title": title})
+    
+    results = mongo.find("publications", {"title": title})
     if not results:
         return html.Div("No details available.")
 
@@ -612,18 +623,15 @@ def get_university_keyword_scores(university_name, top_n):
     """Get aggregated keyword scores for a university's faculty"""
     query = """
     SELECT
-        k.name AS keyword,
-        SUM(fk.score) as total_score,
-        COUNT(DISTINCT f.id) as professor_count,
-        GROUP_CONCAT(DISTINCT f.name) as professors,
-        MAX(u.photo_url) as photo_url
-    FROM faculty f
-    JOIN faculty_keyword fk ON f.id = fk.faculty_id
-    JOIN keyword k ON fk.keyword_id = k.id
-    JOIN university u ON u.id = f.university_id
-    WHERE u.name LIKE %s
-    GROUP BY k.name
-    ORDER BY total_score DESC
+    keyword,
+    SUM(score) AS total_score,
+    COUNT(DISTINCT faculty_id) AS professor_count,
+    GROUP_CONCAT(DISTINCT faculty_name) AS professors,
+    MAX(photo_url) AS photo_url
+    FROM university_keyword_summary_view
+    WHERE university_name LIKE %s
+    GROUP BY keyword
+    ORDER BY total_score DESC;
     """
     all_keywords = execute_query(query, (university_name,))
     total_keywords = len(all_keywords)
