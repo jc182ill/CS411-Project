@@ -1,66 +1,84 @@
-.list-detail-container {
-    display: grid;
-    grid-template-columns: 35% 65%;
-    gap: 20px;
-    height: 600px;
+body {
+    background-color: #002b23;
+    color: #ffffff;
+    font-family: 'Segoe UI', sans-serif;
+    margin: 0;
+    padding: 0;
+}
+
+h1, h2, h3, h4, h5 {
+    color: #ffffff;
+}
+
+.control-panel, .details-panel, .stats-panel, .photo-card, .university-tab-content, .list-detail-container {
+    background-color: #014036;
+    border: 2px solid #00bfff;
+    border-radius: 10px;
+    padding: 15px;
+    margin: 10px 0;
+}
+
+.keyword-input, .control-column input, .university-input {
+    width: 100%;
+    padding: 8px;
+    background-color: #01372d;
+    color: #ffffff;
+    border: 1px solid #00bfff;
+    border-radius: 6px;
+}
+
+input[type="text"], input[type="number"] {
+    color: white;
+}
+
+label.control-label {
+    font-weight: bold;
+    display: block;
+    margin-bottom: 4px;
 }
 
 .scrollable-list {
+    max-height: 400px;
     overflow-y: auto;
-    border-right: 1px solid #ddd;
-    padding-right: 15px;
-}
-
-.faculty-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-.faculty-list-item {
-    padding: 15px;
-    margin-bottom: 10px;
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    transition: transform 0.2s, box-shadow 0.2s;
-    cursor: pointer;
-}
-
-.faculty-list-item:hover {
-    transform: translateX(5px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-}
-
-.details-panel {
-    background: white;
-    padding: 20px;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-.score-indicator {
-    color: #666;
-    font-size: 0.9em;
-}
-
-.visualization-container {
-    display: grid;
-    grid-template-columns: 300px 1fr;
-    gap: 20px;
-    align-items: start;
-}
-
-.photo-card {
-    background: white;
-    border-radius: 10px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    padding: 15px;
+    border: 1px solid #00bfff;
+    padding: 10px;
+    border-radius: 6px;
+    background-color: #01372d;
 }
 
 .university-photo {
-    width: 100%;
-    border-radius: 5px;
-    aspect-ratio: 16/9;
+    max-width: 100%;
+    border-radius: 10px;
+    border: 2px solid #00bfff;
 }
+
+.dash-graph {
+    border: 2px solid #00bfff;
+    border-radius: 10px;
+    padding: 10px;
+    background-color: #014036;
+}
+
+button, .btn {
+    background-color: #00bfff;
+    color: #002b23;
+    border: none;
+    padding: 10px 15px;
+    font-weight: bold;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+button:hover, .btn:hover {
+    background-color: #33ccff;
+}
+
+/* Applies to all dcc.Input fields */
+input[type="text"],
+input[type="number"] {
+    color: black;              /* Text color inside input */
+    background-color: white;  /* Optional: improve visibility */
+}
+
+
 
