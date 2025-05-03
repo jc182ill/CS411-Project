@@ -291,8 +291,7 @@ def execute_query(query, params=None, db_type='mysql'):
         # Neo4j execution path
         try:
             n4j = Neo4jUtils(**NEO4J_CONFIG)
-            if not n4j.connect():
-            	raise ConnectionError("Neo4j connection failed")
+            if not n4j.connect(): raise ConnectionError("Neo4j connection failed")
             records = n4j.execute_query(query, params)
             # Convert Neo4j records to DataFrame
             data = [dict(rec) for rec in records]
@@ -1239,5 +1238,4 @@ def update_keyword_score(n_clicks, entity_type, entity_name, keyword_name, new_s
 
 if __name__ == '__main__':
     app.run(debug=True, dev_tools_hot_reload=False, port=8050)
-
 
