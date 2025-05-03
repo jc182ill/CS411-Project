@@ -168,7 +168,7 @@ app.layout = html.Div([
     ]),
     dcc.Tab(label='Related Keywords', children=[
 	html.Div([
-	    html.H4("Semantic Keyword Explorer", className='widget-header'),
+	    html.H4("Related Keyword Explorer", className='widget-header'),
 	    html.Div([
 		dcc.Input(
 		    id='keyword-input',
@@ -207,8 +207,15 @@ app.layout = html.Div([
 		style={'height': '900px', 'width': '100%'},
 		config={'displayModeBar': False},
 		className='network-graph'
-	    ), 
-	], className='similarity-widget')
+	    ),
+	    html.Div(id='kw-match-faculty-card'),
+	    html.Div(id='related-keyword-results'),
+            html.Br(),
+            html.H4("Select a Related Keyword"),
+	    dcc.Dropdown(id='related-keyword-dropdown', placeholder="Select from related keywords", multi = True), 
+	    html.Div(id = 'keyword-matching-results')
+	], 
+	className='similarity-widget')
     ]),
     dcc.Tab(label='Database Editor', children=[
     html.Div([
@@ -218,8 +225,7 @@ app.layout = html.Div([
             id='admin-entity-type',
             options=[
                 {'label': 'Faculty', 'value': 'faculty'},
-                {'label': 'Publication', 'value': 'publication'},
-                {'label': 'University', 'value': 'university'}
+                {'label': 'Publication', 'value': 'publication'}
             ],
             placeholder="Select entity type"
         ),
@@ -244,21 +250,16 @@ app.layout = html.Div([
         html.Div(id='admin-pending-list')
     ])
 ]),
-	dcc.Tab(label='Keyword Matcher', children=[
-	    html.Div([
-		html.H3("Keyword Relevance Matcher"),
-		dcc.Input(id='kw-match-input', type='text', placeholder='Enter comma-separated keywords...'),		
-                dcc.Input(id='kw-match-limit', type='number', value=10, min=1, max=1000, step=1, debounce=True, style={'width': '100px'}),
-		html.Button("Find Matches", id='kw-match-btn'),
-		html.Div(id='kw-match-status', style={'marginTop': '10px'}),
-		html.H4("Top Professors"),
-		html.Div(id='kw-match-faculty'),
-		html.H4("Top Publications"),
-		html.Div(id='kw-match-publications'),
-		html.Hr(),
-                html.Div(id='kw-match-faculty-card', className='details-panel')
-	    ])
-	])
+     dcc.Tab(label='Keyword Editor', children=[
+     html.Div([
+         dcc.Input(id='entity-type-input', type='text', placeholder='Enter "faculty" or "publication"'),
+         dcc.Input(id='entity-name-input', type='text', placeholder='Enter professor or publication name'),
+         dcc.Input(id='keyword-name-input', type='text', placeholder='Enter keyword name'),
+         dcc.Input(id='new-score-input', type='number', placeholder='Enter new score'),
+         html.Button('Update Score', id='update-score-btn'),
+         html.Div(id='update-score-status')
+     ])
+    ])
     ])
 ], style={'fontFamily': 'Arial, sans-serif'})
 
@@ -886,36 +887,151 @@ def create_network_graph(nodes, links, root_keyword):
     )
 
     return fig
+    
+def get_top_faculty_and_publications_by_keywords(keywords: list[str], top_n: int = 10):
+    faculty_query = """
+    SELECT 
+        f.id,
+        f.name,
+        f.position,
+        u.name AS university,
+        SUM(fk.score) AS total_score,
+        COUNT(DISTINCT k.name) AS matched_keywords
+    FROM faculty f
+    JOIN faculty_keyword fk ON f.id = fk.faculty_id
+    JOIN keyword k ON fk.keyword_id = k.id
+    JOIN university u ON f.university_id = u.id
+    WHERE k.name IN %(keywords)s
+    GROUP BY f.id, u.name
+    ORDER BY total_score DESC
+    LIMIT %(limit)s;
+    """
 
+    pub_query = """
+    SELECT 
+        p.id,
+        p.title,
+        p.venue,
+        p.year,
+        SUM(pk.score) AS total_score,
+        COUNT(DISTINCT k.name) AS matched_keywords
+    FROM publication p
+    JOIN Publication_Keyword pk ON p.id = pk.publication_id
+    JOIN keyword k ON pk.keyword_id = k.id
+    WHERE k.name IN %(keywords)s
+    GROUP BY p.id
+    ORDER BY total_score DESC
+    LIMIT %(limit)s;
+    """
+
+    params = {"keywords": tuple(keywords), "limit": top_n}
+    top_faculty = execute_query(faculty_query, params)
+    top_pubs = execute_query(pub_query, params)
+
+    return top_faculty, top_pubs
+    
+def display_clicked_faculty_from_match(clicks):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    faculty_name = eval(triggered_id)['index']
+    try:
+        details = get_full_faculty_details(faculty_name)
+        return create_faculty_card(details)
+    except Exception as e:
+        return html.Div("Error loading faculty details.")
 # Callback Logic
 @app.callback(
-    Output('keyword-network', 'figure'),
-    [Input('keyword-input', 'value'),
-     Input('connection-threshold', 'value'),
-     Input('keyword-filter-type', 'value')],
+    [
+        Output('keyword-network', 'figure'),
+        Output('related-keyword-results', 'children'),
+        Output('related-keyword-dropdown', 'options'),
+        Output('keyword-matching-results', 'children'),
+        Output('kw-match-faculty-card', 'children')
+    ],
+    [
+        Input('keyword-input', 'value'),
+        Input('connection-threshold', 'value'),
+        Input('keyword-filter-type', 'value'),
+        Input('related-keyword-dropdown', 'value'),
+        Input({'type': 'kwmatch-faculty-name', 'index': dash.dependencies.ALL}, 'n_clicks')
+    ],
     prevent_initial_call=True
 )
-def update_keyword_network(selected_keyword, min_conn, filter_type):
+def update_keyword_and_match(selected_keyword, min_conn, filter_type, dropdown_value, faculty_clicks):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    # Handle faculty card click
+    if "kwmatch-faculty-name" in triggered_id:
+        faculty_name = eval(triggered_id)['index']
+        try:
+            details = get_full_faculty_details(faculty_name)
+            return dash.no_update, dash.no_update, dash.no_update, dash.no_update, create_faculty_card(details)
+        except Exception:
+            return dash.no_update, dash.no_update, dash.no_update, dash.no_update, html.Div("Error loading faculty details.")
+
+    # If no input keyword, halt
     if not selected_keyword:
-        return empty_figure("Select a keyword to begin analysis")
-    
+        return empty_figure("Select a keyword to begin analysis"), [], [], "", ""
+
+    # Run Neo4j keyword network
     results = find_similar_keywords(selected_keyword, min_conn, filter_type)
-    
     if not results:
-        return empty_figure("No significant connections found")
-    
+        return empty_figure("No significant connections found"), [], [], "", ""
+
+    # Build graph data
     nodes = [{'id': selected_keyword, 'size': 40, 'score': 0}] + [
-        {'id': kw['keyword'], 'size': 20, 'score': kw['totalScore']}
-        for kw in results
-    ]    
+        {'id': kw['keyword'], 'size': 20, 'score': kw['totalScore']} for kw in results
+    ]
     links = [{
         'source': selected_keyword,
         'target': kw['keyword'],
         'value': kw['totalScore'],
         'type': ' / '.join(kw['viaEntities'])
     } for kw in results]
-    
-    return create_network_graph(nodes, links, selected_keyword)
+
+    # Dropdown options
+    dropdown_options = [{'label': kw['keyword'], 'value': kw['keyword']} for kw in results]
+
+    # Run matcher only if a dropdown keyword is selected
+    if dropdown_value:
+        keywords = [selected_keyword.lower()] + [kw.lower() for kw in dropdown_value] if isinstance(dropdown_value, list) else [selected_keyword.lower(), dropdown_value.lower()]
+        faculty_df, pub_df = get_top_faculty_and_publications_by_keywords(keywords)
+
+        faculty_list = [
+            html.Div([
+                html.A(
+                    row['name'],
+                    href="#",
+                    id={'type': 'kwmatch-faculty-name', 'index': row['id']},
+                    n_clicks=0,
+                    style={'fontWeight': 'bold'}
+                ),
+                html.Span(f" — {row['position']} at {row['university']} — Score: {row['total_score']}")
+            ]) for _, row in faculty_df.iterrows()
+        ] if not faculty_df.empty else [html.Div("No matching faculty found.")]
+
+        pub_list = [
+            html.Div(f"{row['title']} ({row['venue']}, {row['year']}) — Score: {row['total_score']}")
+            for _, row in pub_df.iterrows()
+        ] if not pub_df.empty else [html.Div("No matching publications found.")]
+
+        match_output = html.Div([
+            html.H5(f"Results for: {selected_keyword}, {dropdown_value}"),
+            html.Br(),
+            html.Div(faculty_list, style={'marginBottom': '30px'}),
+            html.Div(pub_list)
+        ])
+    else:
+        match_output = ""
+
+    return create_network_graph(nodes, links, selected_keyword), None, dropdown_options, match_output, ""
     
 def process_admin_action(action: str, entity_type: str, entity_name: str, json_input: str = "") -> str:
     collection_map = {
@@ -1068,116 +1184,58 @@ def handle_admin_actions(submit_click, delete_click, approve_click, entity_type,
         ]
 
     return status, html.Ul(pending_list), html.Ul(history), current_json
-    
-def get_top_faculty_and_publications_by_keywords(keywords: list[str], top_n: int = 10):
-    faculty_query = """
-    SELECT 
-        f.id,
-        f.name,
-        f.position,
-        u.name AS university,
-        SUM(fk.score) AS total_score,
-        COUNT(DISTINCT k.name) AS matched_keywords
-    FROM faculty f
-    JOIN faculty_keyword fk ON f.id = fk.faculty_id
-    JOIN keyword k ON fk.keyword_id = k.id
-    JOIN university u ON f.university_id = u.id
-    WHERE k.name IN %(keywords)s
-    GROUP BY f.id, u.name
-    ORDER BY total_score DESC
-    LIMIT %(limit)s;
-    """
-
-    pub_query = """
-    SELECT 
-        p.id,
-        p.title,
-        p.venue,
-        p.year,
-        SUM(pk.score) AS total_score,
-        COUNT(DISTINCT k.name) AS matched_keywords
-    FROM publication p
-    JOIN Publication_Keyword pk ON p.id = pk.publication_id
-    JOIN keyword k ON pk.keyword_id = k.id
-    WHERE k.name IN %(keywords)s
-    GROUP BY p.id
-    ORDER BY total_score DESC
-    LIMIT %(limit)s;
-    """
-
-    params = {"keywords": tuple(keywords), "limit": top_n}
-    top_faculty = execute_query(faculty_query, params)
-    top_pubs = execute_query(pub_query, params)
-
-    return top_faculty, top_pubs
-    
-def display_clicked_faculty_from_match(clicks):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        raise PreventUpdate
-
-    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    faculty_name = eval(triggered_id)['index']
-    try:
-        details = get_full_faculty_details(faculty_name)
-        return create_faculty_card(details)
-    except Exception as e:
-        return html.Div("Error loading faculty details.")
 
 @app.callback(
-    [Output('kw-match-status', 'children'),
-     Output('kw-match-faculty', 'children'),
-     Output('kw-match-publications', 'children'),
-     Output('kw-match-faculty-card', 'children')],
-    [Input('kw-match-btn', 'n_clicks'),
-     Input({'type': 'kwmatch-faculty-name', 'index': dash.dependencies.ALL}, 'n_clicks')],
-    [State('kw-match-input', 'value'),
-     State('kw-match-limit', 'value'),]
+    Output('update-score-status', 'children'),
+    Input('update-score-btn', 'n_clicks'),
+    State('entity-type-input', 'value'),
+    State('entity-name-input', 'value'),
+    State('keyword-name-input', 'value'),
+    State('new-score-input', 'value')
 )
-def keyword_match(btn_clicks, faculty_clicks, keyword_input, limit):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        raise PreventUpdate
+def update_keyword_score(n_clicks, entity_type, entity_name, keyword_name, new_score):
+    if not all([entity_type, entity_name, keyword_name, new_score]):
+        raise dash.exceptions.PreventUpdate
 
-    # Check if the trigger came from a clicked faculty name
-    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    if "kwmatch-faculty-name" in triggered_id:
-        faculty_name = eval(triggered_id)['index']
-        try:
-            details = get_full_faculty_details(faculty_name)
-            return dash.no_update, dash.no_update, dash.no_update, create_faculty_card(details)
-        except Exception:
-            return dash.no_update, dash.no_update, dash.no_update, html.Div("Error loading faculty details.")
+    entity_type = entity_type.lower().strip()
+    if entity_type not in ['faculty', 'publication']:
+        return "Invalid entity type. Use 'faculty' or 'publication'."
 
-    # Otherwise, it's a keyword search
-    if not keyword_input:
-        return "Enter keywords to begin search.", "", "", ""
+    # Look up entity ID
+    entity_table = 'faculty' if entity_type == 'faculty' else 'publication'
+    entity_id_result = execute_query(
+        f"SELECT id FROM {entity_table} WHERE name = %(name)s",
+        {'name': entity_name}
+    )
+    if entity_id_result.empty:
+        return f"{entity_type.capitalize()} '{entity_name}' not found."
+    entity_id = entity_id_result.iloc[0]['id']
 
-    keywords = [kw.strip().lower() for kw in keyword_input.split(',') if kw.strip()]
-    if len(keywords) < 2:
-        return "Enter at least two keywords.", "", "", ""
+    # Look up keyword ID
+    keyword_result = execute_query(
+        "SELECT id FROM keyword WHERE name = %(name)s",
+        {'name': keyword_name}
+    )
+    if keyword_result.empty:
+        return f"Keyword '{keyword_name}' not found."
+    keyword_id = keyword_result.iloc[0]['id']
 
-    faculty_df, pub_df = get_top_faculty_and_publications_by_keywords(keywords, limit)
+    # Perform update
+    mapping_table = 'faculty_keyword' if entity_type == 'faculty' else 'Publication_Keyword'
+    id_field = f"{entity_type}_id"
+    update_query = f"""
+        UPDATE {mapping_table}
+        SET score = %(new_score)s
+        WHERE {id_field} = %(entity_id)s AND keyword_id = %(keyword_id)s
+    """
+    execute_query(update_query, {
+        'new_score': new_score,
+        'entity_id': entity_id,
+        'keyword_id': keyword_id
+    })
 
-    faculty_list = [
-        html.Div([
-            html.A(
-                row['name'],
-                href="#",
-                id={'type': 'kwmatch-faculty-name', 'index': row['id']},
-                n_clicks=0,
-                style={'fontWeight': 'bold'}
-            ),
-            html.Span(f" — {row['position']} at {row['university']} — Score: {row['total_score']}")
-        ]) for _, row in faculty_df.iterrows()
-    ] if not faculty_df.empty else [html.Div("No matching faculty found.")]
+    return f"Updated score for {entity_type} '{entity_name}' and keyword '{keyword_name}' to {new_score}."
 
-    pub_list = [
-        html.Div(f"{row['title']} ({row['venue']}, {row['year']}) — Score: {row['total_score']}")
-        for _, row in pub_df.iterrows()
-    ] if not pub_df.empty else [html.Div("No matching publications found.")]
-
-    return f"Results for: {', '.join(keywords)}", faculty_list, pub_list, ""
 
 if __name__ == '__main__':
     app.run(debug=True, dev_tools_hot_reload=False, port=8050)
