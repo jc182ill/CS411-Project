@@ -611,7 +611,6 @@ def display_publication_card(clickData):
     name = pub.get("title")
     override_doc = mongo.find("publications_overrides", {"entity_str": name, "approved": True})
     if override_doc:
-        print("check")
         for k, v in override_doc[0].items():
             if k not in ["_id", "entity_id", "approved"]:
                 pub[k] = v
@@ -760,45 +759,52 @@ def update_university_tab(name_input, top_n=10):
 def find_similar_keywords(keyword: str, min_connections: int = 3, filter_type: str = "both") -> list:
     """
     Returns a list of keywords that share at least `min_connections` professors or publications
-    with the input keyword.
+    with the input keyword. Filter by 'faculty', 'publication', or 'both'.
     """
     query = """
-    // === Professor-based keyword similarity ===
-    MATCH (k:KEYWORD {name: $keyword})
-    MATCH (k)<-[:INTERESTED_IN]-(f:FACULTY)-[:INTERESTED_IN]->(other:KEYWORD)
-    WHERE other.name <> $keyword
-    WITH other.name AS keyword, COUNT(DISTINCT f) AS connCount
-    WHERE connCount >= $min_conn
-    RETURN keyword, ['Faculty'] AS viaEntities, connCount AS totalScore
+// === Faculty and publication keyword similarity ===
+MATCH (k:KEYWORD {name: $keyword})
+WITH k
 
-    UNION
+// Faculty relationships
+OPTIONAL MATCH (k)<-[:INTERESTED_IN]-(f:FACULTY)-[:INTERESTED_IN]->(other1:KEYWORD)
+WHERE other1.name <> $keyword
+WITH k, other1.name AS keyword, COUNT(DISTINCT f) AS facultyCount
 
-    // === Publication-based keyword similarity ===
-    MATCH (k:KEYWORD {name: $keyword})
-    MATCH (k)<-[:LABEL_BY]-(p:PUBLICATION)-[:LABEL_BY]->(other:KEYWORD)
-    WHERE other.name <> $keyword
-    WITH other.name AS keyword, COUNT(DISTINCT p) AS connCount
-    WHERE connCount >= $min_conn
-    RETURN keyword, ['Publication'] AS viaEntities, connCount AS totalScore
-
-    ORDER BY totalScore DESC
-    LIMIT 15
+// Publication relationships
+OPTIONAL MATCH (k)<-[:LABEL_BY]-(p:PUBLICATION)-[:LABEL_BY]->(other2:KEYWORD)
+WHERE other2.name <> $keyword AND other2.name = keyword
+WITH keyword,
+     facultyCount,
+     COUNT(DISTINCT p) AS pubCount,
+     CASE $filter_type
+         WHEN 'faculty' THEN facultyCount
+         WHEN 'publication' THEN COUNT(DISTINCT p)
+         ELSE (facultyCount + COUNT(DISTINCT p))
+     END AS totalScore,
+     COUNT(DISTINCT p) AS pubCountFinal  // Needed separately
+WITH keyword,
+     facultyCount,
+     pubCountFinal,
+     totalScore,
+     [x IN ['Faculty', 'Publication']
+      WHERE (x = 'Faculty' AND facultyCount > 0) OR (x = 'Publication' AND pubCountFinal > 0)] AS viaEntities
+WHERE totalScore >= $min_conn
+RETURN keyword, viaEntities, totalScore
+ORDER BY totalScore DESC
     """
 
     params = {
         "keyword": keyword.strip().lower(),
-        "min_conn": min_connections
+        "min_conn": min_connections,
+        "filter_type": filter_type.lower()
     }
 
     df = execute_query(query=query, params=params, db_type='neo4j')
-    if filter_type == 'faculty':
-        df = df[df['viaEntities'].apply(lambda entities: 'Faculty' in entities)]
-    elif filter_type == 'publication':
-        df = df[df['viaEntities'].apply(lambda entities: 'Publication' in entities)]
 
     if df.empty:
         return []
-    
+
     return df.to_dict('records')
     
 def empty_figure(message: str = "No data available") -> go.Figure:
@@ -902,7 +908,7 @@ def create_network_graph(nodes, links, root_keyword):
 
     return fig
     
-def get_top_faculty_and_publications_by_keywords(keywords: list[str], top_n: int = 10):
+def get_top_faculty_and_publications_by_keywords(keywords: list[str], keyword_count: int = 2, top_n: int = 10):
     faculty_query = """
     SELECT 
         f.id,
@@ -917,6 +923,7 @@ def get_top_faculty_and_publications_by_keywords(keywords: list[str], top_n: int
     JOIN university u ON f.university_id = u.id
     WHERE k.name IN %(keywords)s
     GROUP BY f.id, u.name
+    HAVING COUNT(DISTINCT k.name) >= %(keyword_count)s
     ORDER BY total_score DESC
     LIMIT %(limit)s;
     """
@@ -934,11 +941,12 @@ def get_top_faculty_and_publications_by_keywords(keywords: list[str], top_n: int
     JOIN keyword k ON pk.keyword_id = k.id
     WHERE k.name IN %(keywords)s
     GROUP BY p.id
+    HAVING COUNT(DISTINCT k.name) >= %(keyword_count)s
     ORDER BY total_score DESC
     LIMIT %(limit)s;
     """
 
-    params = {"keywords": tuple(keywords), "limit": top_n}
+    params = {"keywords": tuple(keywords), "keyword_count": len(keywords),"limit": top_n}
     top_faculty = execute_query(faculty_query, params)
     top_pubs = execute_query(pub_query, params)
 
